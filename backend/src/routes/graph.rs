@@ -1,0 +1,497 @@
+//! O grafo: tags, coleções recursivas e relações obra↔obra.
+//!
+//! É aqui que o modelo do 0001 finalmente se paga. Nada nestas rotas precisou
+//! de tabela nova — franquia, playlist, ordem de exibição alternativa e "corte
+//! do diretor de" saem todas das mesmas três estruturas.
+
+use axum::extract::{Path, Query, State};
+use axum::Json;
+use serde::Deserialize;
+use serde_json::{json, Value};
+use uuid::Uuid;
+
+use crate::auth::AuthUser;
+use crate::error::{AppError, AppResult};
+use crate::models::{
+    AddItem, AttachTag, CollectionNode, CollectionRow, NewCollection, NewRelation, RelationRow,
+    ReorderItems, TagNamespace, TagRow, UpdateCollection, WorkTag,
+};
+use crate::AppState;
+
+const COLLECTION_COLUMNS: &str = r#"
+    c.id, c.kind, c.parent_id, c.title, c.year, c.overview, c.description,
+    c.position, c.origin, c.provider_key,
+    (SELECT count(*) FROM collection_item ci WHERE ci.collection_id = c.id) AS item_count
+"#;
+
+// ------------------------------------------------------------------- tags
+
+pub async fn list_tags(State(state): State<AppState>) -> AppResult<Json<Vec<TagRow>>> {
+    let tags = sqlx::query_as::<_, TagRow>(
+        "SELECT t.id, t.namespace, t.value, t.color,
+                (SELECT count(*) FROM work_tag wt WHERE wt.tag_id = t.id) AS work_count
+         FROM tag t
+         ORDER BY t.namespace, t.value",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(tags))
+}
+
+/// Namespaces com rótulo e cor. Não é uma lista de permitidos — qualquer
+/// namespace novo funciona; estes só ganham tratamento visual fixo.
+pub async fn list_namespaces(State(state): State<AppState>) -> AppResult<Json<Vec<TagNamespace>>> {
+    let rows = sqlx::query_as::<_, TagNamespace>(
+        "SELECT namespace, label, color, position FROM tag_namespace ORDER BY position, label",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+pub async fn work_tags(
+    State(state): State<AppState>,
+    Path(work_id): Path<Uuid>,
+) -> AppResult<Json<Vec<WorkTag>>> {
+    Ok(Json(tags_of(&state, work_id).await?))
+}
+
+pub async fn attach_tag(
+    State(state): State<AppState>,
+    Path(work_id): Path<Uuid>,
+    Json(body): Json<AttachTag>,
+) -> AppResult<Json<Vec<WorkTag>>> {
+    let namespace = body.namespace.trim().to_lowercase();
+    let value = body.value.trim().to_string();
+    if namespace.is_empty() || value.is_empty() {
+        return Err(AppError::BadRequest("namespace e valor são obrigatórios".into()));
+    }
+
+    let tag_id: Uuid = sqlx::query_scalar(
+        "INSERT INTO tag (namespace, value, color) VALUES ($1, $2, $3)
+         ON CONFLICT (namespace, value) DO UPDATE SET color = COALESCE(EXCLUDED.color, tag.color)
+         RETURNING id",
+    )
+    .bind(&namespace)
+    .bind(&value)
+    .bind(body.color)
+    .fetch_one(&state.pool)
+    .await?;
+
+    sqlx::query(
+        "INSERT INTO work_tag (work_id, tag_id, source) VALUES ($1, $2, 'manual')
+         ON CONFLICT (work_id, tag_id) DO UPDATE SET source = 'manual'",
+    )
+    .bind(work_id)
+    .bind(tag_id)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Json(tags_of(&state, work_id).await?))
+}
+
+pub async fn detach_tag(
+    State(state): State<AppState>,
+    Path((work_id, tag_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<Json<Vec<WorkTag>>> {
+    sqlx::query("DELETE FROM work_tag WHERE work_id = $1 AND tag_id = $2")
+        .bind(work_id)
+        .bind(tag_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Json(tags_of(&state, work_id).await?))
+}
+
+pub async fn tags_of(state: &AppState, work_id: Uuid) -> AppResult<Vec<WorkTag>> {
+    let rows = sqlx::query_as::<_, WorkTag>(
+        "SELECT t.id, t.namespace, t.value, t.color, wt.source
+         FROM work_tag wt JOIN tag t ON t.id = wt.tag_id
+         WHERE wt.work_id = $1
+         ORDER BY t.namespace, t.value",
+    )
+    .bind(work_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(rows)
+}
+
+// ------------------------------------------------------------- coleções
+
+#[derive(Debug, Deserialize)]
+pub struct CollectionFilter {
+    pub kind: Option<String>,
+    /// Só as raízes (sem pai) — útil pra listar franquias e playlists.
+    #[serde(default)]
+    pub roots_only: bool,
+}
+
+pub async fn list_collections(
+    State(state): State<AppState>,
+    Query(filter): Query<CollectionFilter>,
+) -> AppResult<Json<Vec<CollectionRow>>> {
+    let rows = sqlx::query_as::<_, CollectionRow>(&format!(
+        "SELECT {COLLECTION_COLUMNS}
+         FROM collection c
+         WHERE ($1::text IS NULL OR c.kind = $1)
+           AND (NOT $2 OR c.parent_id IS NULL)
+         ORDER BY c.kind, c.position NULLS LAST, c.title"
+    ))
+    .bind(filter.kind)
+    .bind(filter.roots_only)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(Json(rows))
+}
+
+/// A árvore inteira. Franquia → série → temporada, quantos níveis houver.
+pub async fn collection_tree(State(state): State<AppState>) -> AppResult<Json<Vec<CollectionNode>>> {
+    let all = sqlx::query_as::<_, CollectionRow>(&format!(
+        "SELECT {COLLECTION_COLUMNS} FROM collection c
+         ORDER BY c.position NULLS LAST, c.title"
+    ))
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(build_tree(all)))
+}
+
+/// Montagem em memória: uma CTE recursiva devolveria linhas planas que teríamos
+/// que remontar aqui de qualquer jeito.
+///
+/// Agrupa por pai uma vez e vai consumindo o mapa — além de ser O(n), o
+/// `remove` garante que um ciclo acidental de `parent_id` não vire recursão
+/// infinita.
+fn build_tree(all: Vec<CollectionRow>) -> Vec<CollectionNode> {
+    let mut by_parent: std::collections::HashMap<Option<Uuid>, Vec<CollectionRow>> =
+        std::collections::HashMap::new();
+    for collection in all {
+        by_parent.entry(collection.parent_id).or_default().push(collection);
+    }
+    take_children(&mut by_parent, None)
+}
+
+fn take_children(
+    by_parent: &mut std::collections::HashMap<Option<Uuid>, Vec<CollectionRow>>,
+    parent: Option<Uuid>,
+) -> Vec<CollectionNode> {
+    by_parent
+        .remove(&parent)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|collection| {
+            let id = collection.id;
+            CollectionNode {
+                collection,
+                children: take_children(by_parent, Some(id)),
+            }
+        })
+        .collect()
+}
+
+pub async fn collection_detail(
+    State(state): State<AppState>,
+    user: AuthUser,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Value>> {
+    let collection = sqlx::query_as::<_, CollectionRow>(&format!(
+        "SELECT {COLLECTION_COLUMNS} FROM collection c WHERE c.id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)?;
+
+    let children = sqlx::query_as::<_, CollectionRow>(&format!(
+        "SELECT {COLLECTION_COLUMNS} FROM collection c
+         WHERE c.parent_id = $1 ORDER BY c.position NULLS LAST, c.title"
+    ))
+    .bind(id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    // Ordem explícita da coleção — é isto que faz "ordem Machete" funcionar.
+    let items = sqlx::query_as::<_, crate::models::WorkListItem>(
+        r#"
+        SELECT
+            w.id, w.kind, w.title, w.year, w.season_number, w.episode_number,
+            w.match_state, w.match_confidence, w.dominant_color,
+            w.artwork->>'poster' AS poster,
+            NULL::text AS series_title,
+            f.id AS media_file_id, f.duration_seconds, f.width, f.height,
+            f.video_codec, f.audio_codec, f.container, f.size_bytes,
+            ps.position_seconds, ps.finished,
+            tg.tags
+        FROM collection_item ci
+        JOIN work w ON w.id = ci.work_id
+        LEFT JOIN LATERAL (
+            SELECT m.* FROM media_file m
+            WHERE m.work_id = w.id AND m.status = 'probed'
+            ORDER BY m.size_bytes DESC LIMIT 1
+        ) f ON true
+        LEFT JOIN LATERAL (
+            SELECT array_agg(t.namespace || ':' || t.value ORDER BY t.namespace, t.value) AS tags
+            FROM work_tag wt JOIN tag t ON t.id = wt.tag_id
+            WHERE wt.work_id = w.id
+        ) tg ON true
+        LEFT JOIN playback_state ps ON ps.work_id = w.id AND ps.user_id = $2
+        WHERE ci.collection_id = $1
+        ORDER BY ci.position NULLS LAST, w.title
+        "#,
+    )
+    .bind(id)
+    .bind(user.id())
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(json!({
+        "collection": collection,
+        "children": children,
+        "items": items,
+    })))
+}
+
+pub async fn create_collection(
+    State(state): State<AppState>,
+    Json(body): Json<NewCollection>,
+) -> AppResult<Json<CollectionRow>> {
+    if body.title.trim().is_empty() {
+        return Err(AppError::BadRequest("título é obrigatório".into()));
+    }
+
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO collection (kind, title, parent_id, description, year, origin)
+         VALUES ($1, $2, $3, $4, $5, 'manual') RETURNING id",
+    )
+    .bind(&body.kind)
+    .bind(body.title.trim())
+    .bind(body.parent_id)
+    .bind(body.description)
+    .bind(body.year)
+    .fetch_one(&state.pool)
+    .await?;
+
+    fetch_collection(&state, id).await.map(Json)
+}
+
+pub async fn update_collection(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<UpdateCollection>,
+) -> AppResult<Json<CollectionRow>> {
+    sqlx::query(
+        "UPDATE collection SET
+            title       = COALESCE($2, title),
+            description = COALESCE($3, description),
+            year        = COALESCE($4, year)
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(body.title)
+    .bind(body.description)
+    .bind(body.year)
+    .execute(&state.pool)
+    .await?;
+
+    fetch_collection(&state, id).await.map(Json)
+}
+
+pub async fn delete_collection(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> AppResult<Json<Value>> {
+    // Série e temporada vieram do provider; apagar na mão só desincroniza.
+    let origin: Option<String> = sqlx::query_scalar("SELECT origin FROM collection WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?;
+
+    match origin.as_deref() {
+        None => return Err(AppError::NotFound),
+        Some("provider") => {
+            return Err(AppError::BadRequest(
+                "esta coleção veio do provider — refaça a identificação em vez de apagar".into(),
+            ))
+        }
+        _ => {}
+    }
+
+    sqlx::query("DELETE FROM collection WHERE id = $1")
+        .bind(id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+pub async fn add_item(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<AddItem>,
+) -> AppResult<Json<Value>> {
+    // Sem posição explícita, entra no fim da fila.
+    let position = match body.position {
+        Some(p) => p,
+        None => sqlx::query_scalar::<_, Option<i32>>(
+            "SELECT max(position) FROM collection_item WHERE collection_id = $1",
+        )
+        .bind(id)
+        .fetch_one(&state.pool)
+        .await?
+        .unwrap_or(0)
+            + 1,
+    };
+
+    sqlx::query(
+        "INSERT INTO collection_item (collection_id, work_id, position) VALUES ($1, $2, $3)
+         ON CONFLICT (collection_id, work_id) DO UPDATE SET position = EXCLUDED.position",
+    )
+    .bind(id)
+    .bind(body.work_id)
+    .bind(position)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Json(json!({ "ok": true, "position": position })))
+}
+
+pub async fn remove_item(
+    State(state): State<AppState>,
+    Path((id, work_id)): Path<(Uuid, Uuid)>,
+) -> AppResult<Json<Value>> {
+    sqlx::query("DELETE FROM collection_item WHERE collection_id = $1 AND work_id = $2")
+        .bind(id)
+        .bind(work_id)
+        .execute(&state.pool)
+        .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Reordena a coleção inteira numa transação. É o que torna "ordem Machete"
+/// editável de verdade em vez de um enfeite.
+pub async fn reorder(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(body): Json<ReorderItems>,
+) -> AppResult<Json<Value>> {
+    let mut tx = state.pool.begin().await?;
+    for entry in &body.items {
+        sqlx::query(
+            "UPDATE collection_item SET position = $3
+             WHERE collection_id = $1 AND work_id = $2",
+        )
+        .bind(id)
+        .bind(entry.work_id)
+        .bind(entry.position)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true, "reordered": body.items.len() })))
+}
+
+async fn fetch_collection(state: &AppState, id: Uuid) -> AppResult<CollectionRow> {
+    sqlx::query_as::<_, CollectionRow>(&format!(
+        "SELECT {COLLECTION_COLUMNS} FROM collection c WHERE c.id = $1"
+    ))
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or(AppError::NotFound)
+}
+
+pub async fn collections_of(state: &AppState, work_id: Uuid) -> AppResult<Vec<CollectionRow>> {
+    let rows = sqlx::query_as::<_, CollectionRow>(&format!(
+        "SELECT {COLLECTION_COLUMNS}
+         FROM collection_item ci JOIN collection c ON c.id = ci.collection_id
+         WHERE ci.work_id = $1
+         ORDER BY c.kind, c.title"
+    ))
+    .bind(work_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(rows)
+}
+
+// ------------------------------------------------------------- relações
+
+pub async fn relations(
+    State(state): State<AppState>,
+    Path(work_id): Path<Uuid>,
+) -> AppResult<Json<Vec<RelationRow>>> {
+    Ok(Json(relations_of(&state, work_id).await?))
+}
+
+/// Uma aresta é lida dos dois lados: quem aponta ("out") e quem é apontado
+/// ("in"). "É corte alternativo de" e "tem corte alternativo" são a mesma linha.
+pub async fn relations_of(state: &AppState, work_id: Uuid) -> AppResult<Vec<RelationRow>> {
+    let rows = sqlx::query_as::<_, RelationRow>(
+        r#"
+        SELECT e.kind, e.label, e.position, 'out' AS direction,
+               w.id AS other_id, w.title AS other_title, w.year AS other_year,
+               w.artwork->>'poster' AS other_poster
+        FROM work_edge e JOIN work w ON w.id = e.to_work
+        WHERE e.from_work = $1
+        UNION ALL
+        SELECT e.kind, e.label, e.position, 'in' AS direction,
+               w.id AS other_id, w.title AS other_title, w.year AS other_year,
+               w.artwork->>'poster' AS other_poster
+        FROM work_edge e JOIN work w ON w.id = e.from_work
+        WHERE e.to_work = $1
+        ORDER BY kind, position NULLS LAST, other_title
+        "#,
+    )
+    .bind(work_id)
+    .fetch_all(&state.pool)
+    .await?;
+    Ok(rows)
+}
+
+pub async fn create_relation(
+    State(state): State<AppState>,
+    Path(work_id): Path<Uuid>,
+    Json(body): Json<NewRelation>,
+) -> AppResult<Json<Vec<RelationRow>>> {
+    if body.to_work == work_id {
+        return Err(AppError::BadRequest("uma obra não se relaciona consigo mesma".into()));
+    }
+
+    sqlx::query(
+        "INSERT INTO work_edge (from_work, to_work, kind, label, position)
+         VALUES ($1, $2, $3, $4, $5)
+         ON CONFLICT (from_work, to_work, kind)
+         DO UPDATE SET label = EXCLUDED.label, position = EXCLUDED.position",
+    )
+    .bind(work_id)
+    .bind(body.to_work)
+    .bind(&body.kind)
+    .bind(body.label)
+    .bind(body.position)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| match &e {
+        // O CHECK do 0001 limita os tipos de aresta.
+        sqlx::Error::Database(db) if db.code().as_deref() == Some("23514") => {
+            AppError::BadRequest(format!("tipo de relação inválido: {}", body.kind))
+        }
+        _ => AppError::Db(e),
+    })?;
+
+    Ok(Json(relations_of(&state, work_id).await?))
+}
+
+pub async fn delete_relation(
+    State(state): State<AppState>,
+    Path((work_id, other, kind)): Path<(Uuid, Uuid, String)>,
+) -> AppResult<Json<Vec<RelationRow>>> {
+    sqlx::query(
+        "DELETE FROM work_edge
+         WHERE kind = $3 AND ((from_work = $1 AND to_work = $2)
+                           OR (from_work = $2 AND to_work = $1))",
+    )
+    .bind(work_id)
+    .bind(other)
+    .bind(&kind)
+    .execute(&state.pool)
+    .await?;
+
+    Ok(Json(relations_of(&state, work_id).await?))
+}

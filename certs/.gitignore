@@ -1,0 +1,3 @@
+# Certificado e chave nunca vão pro repositório.
+*
+!.gitignore

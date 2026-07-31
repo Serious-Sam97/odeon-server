@@ -1,0 +1,95 @@
+name: odeon
+
+services:
+  db:
+    # pgvector/pgvector:pg18 é a imagem oficial do Postgres 18 com a extensão
+    # `vector` já compilada. Mesma convenção de volume do postgres:18.
+    image: pgvector/pgvector:pg18
+    container_name: odeon-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: odeon
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-odeon}
+      POSTGRES_DB: odeon
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    volumes:
+      # PG18+ quer o mount na raiz, não em /data — ele cria o subdiretório por
+      # major version, o que deixa `pg_upgrade --link` viável no futuro.
+      - db-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U odeon -d odeon"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  api:
+    build:
+      context: ./backend
+      target: dev
+    container_name: odeon-api
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://odeon:${POSTGRES_PASSWORD:-odeon}@db:5432/odeon
+      ODEON_BIND: 0.0.0.0:8080
+      # Todas as pastas que o container enxerga. A interface só deixa criar
+      # biblioteca dentro delas.
+      ODEON_MEDIA_ROOTS: /media,/media2,/media3
+      ODEON_CACHE_DIR: /cache
+      # Sem isso, filmes e séries não são identificados. AniList (anime) funciona sem chave.
+      TMDB_API_KEY: ${TMDB_API_KEY:-}
+      # Origens EXTRAS pro CORS. localhost e o próprio host da requisição já
+      # passam sozinhos — isto é só pra quando o front vier de outro nome.
+      ODEON_ALLOWED_ORIGINS: ${ODEON_ALLOWED_ORIGINS:-}
+      # TLS. Vazios = só HTTP. O caminho recomendado é `tailscale cert`,
+      # que emite um Let's Encrypt de verdade — ver README.
+      ODEON_TLS_CERT: ${ODEON_TLS_CERT:-}
+      ODEON_TLS_KEY: ${ODEON_TLS_KEY:-}
+      ODEON_HTTPS_BIND: 0.0.0.0:8443
+      ODEON_HTTPS_ONLY: ${ODEON_HTTPS_ONLY:-false}
+      RUST_LOG: ${RUST_LOG:-odeon=debug,tower_http=info,info}
+      RUST_BACKTRACE: "1"
+    ports:
+      - "${API_PORT:-8080}:8080"
+      - "${HTTPS_PORT:-8443}:8443"
+    volumes:
+      - ./backend:/app
+      - cargo-registry:/usr/local/cargo/registry
+      - cargo-target:/app/target
+      - ${MEDIA_PATH}:/media:ro
+      # Discos extras, opcionais. Apontam pra si mesmos quando não usados —
+      # o servidor descarta raiz que não existe ou está vazia.
+      - ${MEDIA_PATH_2:-${MEDIA_PATH}}:/media2:ro
+      - ${MEDIA_PATH_3:-${MEDIA_PATH}}:/media3:ro
+      # Onde ficam cert.crt/cert.key. Read-only: o servidor só lê.
+      - ./certs:/certs:ro
+      - cache:/cache
+
+  web:
+    build:
+      context: ./web
+      target: dev
+    container_name: odeon-web
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      # Vazio de propósito: sem isto o front deduz da própria página (mesmo
+      # host, esquema igual, porta 8080/8443). Assim o mesmo build funciona
+      # em HTTP e em HTTPS, e o usuário pode trocar o servidor na tela de login.
+      VITE_API_URL: ${VITE_API_URL:-}
+    ports:
+      - "${WEB_PORT:-5174}:5173"
+    volumes:
+      - ./web:/app
+      - web-modules:/app/node_modules
+
+volumes:
+  db-data:
+  cargo-registry:
+  cargo-target:
+  web-modules:
+  cache:

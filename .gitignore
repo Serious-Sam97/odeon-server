@@ -1,0 +1,33 @@
+# ---------------------------------------------------------------- segredos
+# O .env carrega a chave do TMDB e a senha do Postgres. NUNCA versionar.
+# O .env.example é o modelo, esse sim vai pro repositório.
+.env
+.env.local
+*.pem
+*.key
+*.crt
+
+# ------------------------------------------------------------------ builds
+backend/target/
+web/node_modules/
+web/dist/
+
+# Kotlin / Android / Gradle
+clients/.gradle/
+clients/.kotlin/
+clients/build/
+clients/*/build/
+clients/local.properties
+clients/**/*.iml
+
+# Xcode
+clients/iosApp/build/
+**/xcuserdata/
+**/DerivedData/
+*.xcworkspace/xcshareddata/IDEWorkspaceChecks.plist
+
+# ------------------------------------------------------------------- resto
+*.log
+.DS_Store
+.idea/
+.vscode/

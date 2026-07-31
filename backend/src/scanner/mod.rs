@@ -1,0 +1,316 @@
+pub mod guess;
+pub mod probe;
+
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+
+use chrono::{DateTime, Utc};
+use serde::Serialize;
+use sqlx::PgPool;
+use tokio::sync::Mutex;
+use uuid::Uuid;
+use walkdir::WalkDir;
+
+use crate::models::Library;
+
+const VIDEO_EXTS: &[&str] = &[
+    "mkv", "mp4", "avi", "mov", "m4v", "webm", "ts", "m2ts", "mpg", "mpeg", "wmv", "flv", "ogv",
+];
+
+/// Abaixo disso é sample, trailer ou thumbnail — não é obra.
+const MIN_SIZE_BYTES: u64 = 1024 * 1024;
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ScanStatus {
+    pub running: bool,
+    pub library: Option<String>,
+    pub current_file: Option<String>,
+    pub files_seen: u64,
+    pub files_added: u64,
+    pub files_updated: u64,
+    pub files_missing: u64,
+    pub errors: Vec<String>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+pub type SharedStatus = Arc<Mutex<ScanStatus>>;
+
+enum Outcome {
+    Added,
+    Updated,
+    Unchanged,
+}
+
+/// Varre todas as bibliotecas. Só roda uma por vez; chamada concorrente é no-op.
+/// Devolve `false` se já havia um scan em andamento.
+pub async fn scan_all(pool: PgPool, status: SharedStatus) -> bool {
+    {
+        let mut s = status.lock().await;
+        if s.running {
+            return false;
+        }
+        *s = ScanStatus {
+            running: true,
+            started_at: Some(Utc::now()),
+            ..Default::default()
+        };
+    }
+
+    let started_at = Utc::now();
+
+    let libraries: Vec<Library> = match sqlx::query_as("SELECT * FROM library ORDER BY created_at")
+        .fetch_all(&pool)
+        .await
+    {
+        Ok(l) => l,
+        Err(e) => {
+            let mut s = status.lock().await;
+            s.errors.push(format!("falha ao listar bibliotecas: {e}"));
+            s.running = false;
+            s.finished_at = Some(Utc::now());
+            return true;
+        }
+    };
+
+    for library in &libraries {
+        scan_library(&pool, library, &status, started_at).await;
+    }
+
+    let mut s = status.lock().await;
+    s.running = false;
+    s.current_file = None;
+    s.finished_at = Some(Utc::now());
+    tracing::info!(
+        seen = s.files_seen,
+        added = s.files_added,
+        updated = s.files_updated,
+        missing = s.files_missing,
+        errors = s.errors.len(),
+        "scan concluído"
+    );
+    true
+}
+
+async fn scan_library(
+    pool: &PgPool,
+    library: &Library,
+    status: &SharedStatus,
+    started_at: DateTime<Utc>,
+) {
+    status.lock().await.library = Some(library.name.clone());
+    tracing::info!(library = %library.name, root = %library.root_path, "varrendo");
+
+    let root = library.root_path.clone();
+    let files = match tokio::task::spawn_blocking(move || collect_files(&root)).await {
+        Ok(f) => f,
+        Err(e) => {
+            status
+                .lock()
+                .await
+                .errors
+                .push(format!("walk falhou em {}: {e}", library.root_path));
+            return;
+        }
+    };
+
+    for path in files {
+        {
+            let mut s = status.lock().await;
+            s.files_seen += 1;
+            s.current_file = Some(path.to_string_lossy().to_string());
+        }
+
+        match process_file(pool, library, &path).await {
+            Ok(Outcome::Added) => status.lock().await.files_added += 1,
+            Ok(Outcome::Updated) => status.lock().await.files_updated += 1,
+            Ok(Outcome::Unchanged) => {}
+            Err(e) => {
+                tracing::warn!(path = %path.display(), error = %e, "arquivo ignorado");
+                let mut s = status.lock().await;
+                if s.errors.len() < 100 {
+                    s.errors.push(format!("{}: {e}", path.display()));
+                }
+            }
+        }
+    }
+
+    // Tudo que não foi tocado nesta passada sumiu do disco. Não apagamos —
+    // marcamos, pra não perder histórico de play de um HD desconectado.
+    match sqlx::query(
+        "UPDATE media_file SET status = 'missing'
+         WHERE library_id = $1 AND scanned_at < $2 AND status <> 'missing'",
+    )
+    .bind(library.id)
+    .bind(started_at)
+    .execute(pool)
+    .await
+    {
+        Ok(r) => status.lock().await.files_missing += r.rows_affected(),
+        Err(e) => status
+            .lock()
+            .await
+            .errors
+            .push(format!("falha ao marcar arquivos sumidos: {e}")),
+    }
+}
+
+fn collect_files(root: &str) -> Vec<PathBuf> {
+    WalkDir::new(root)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            // pula ocultos e as pastas de metadata do macOS/Synology
+            let name = e.file_name().to_string_lossy();
+            !(name.starts_with('.') || name == "@eaDir" || name == "lost+found")
+        })
+        .filter_map(Result::ok)
+        .filter(|e| e.file_type().is_file())
+        .filter(|e| {
+            e.path()
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| VIDEO_EXTS.contains(&x.to_ascii_lowercase().as_str()))
+                .unwrap_or(false)
+        })
+        .filter(|e| e.metadata().map(|m| m.len() >= MIN_SIZE_BYTES).unwrap_or(false))
+        .map(|e| e.into_path())
+        .collect()
+}
+
+async fn process_file(pool: &PgPool, library: &Library, path: &Path) -> anyhow::Result<Outcome> {
+    let meta = tokio::fs::metadata(path).await?;
+    let size_bytes = meta.len() as i64;
+    let mtime: DateTime<Utc> = meta.modified()?.into();
+    let path_str = path.to_string_lossy().to_string();
+    let filename = path
+        .file_name()
+        .map(|f| f.to_string_lossy().to_string())
+        .unwrap_or_else(|| path_str.clone());
+
+    let existing: Option<(Uuid, i64, DateTime<Utc>, String, Option<Uuid>)> = sqlx::query_as(
+        "SELECT id, size_bytes, mtime, status, work_id FROM media_file WHERE path = $1",
+    )
+    .bind(&path_str)
+    .fetch_optional(pool)
+    .await?;
+
+    // Arquivo já conhecido e intacto: só carimba a data e sai.
+    // (tolerância de 1s porque o filesystem tem resolução maior que o timestamptz)
+    if let Some((id, prev_size, prev_mtime, prev_status, _)) = &existing {
+        let unchanged = *prev_size == size_bytes
+            && (*prev_mtime - mtime).num_milliseconds().abs() < 1000
+            && prev_status == "probed";
+        if unchanged {
+            sqlx::query("UPDATE media_file SET scanned_at = now() WHERE id = $1")
+                .bind(id)
+                .execute(pool)
+                .await?;
+            return Ok(Outcome::Unchanged);
+        }
+    }
+
+    let probed = probe::probe(path).await;
+
+    let (probed, status, error_message) = match probed {
+        Ok(p) => (Some(p), "probed", None),
+        Err(e) => (None, "error", Some(e.to_string())),
+    };
+
+    // Um arquivo que o ffprobe não lê não vira obra — vira pendência.
+    let work_id = match (&probed, existing.as_ref().and_then(|e| e.4)) {
+        (None, previous) => previous,
+        (Some(_), Some(previous)) => Some(previous),
+        (Some(p), None) => {
+            let guess = guess::guess_from_filename(&filename);
+            Some(create_work(pool, library, &guess, p.duration_seconds).await?)
+        }
+    };
+
+    sqlx::query(
+        r#"
+        INSERT INTO media_file (
+            library_id, work_id, path, filename, size_bytes, mtime,
+            container, duration_seconds, bitrate,
+            video_codec, width, height, frame_rate,
+            audio_codec, audio_channels, subtitle_langs,
+            probe, status, error_message, scanned_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19, now())
+        ON CONFLICT (path) DO UPDATE SET
+            work_id          = EXCLUDED.work_id,
+            size_bytes       = EXCLUDED.size_bytes,
+            mtime            = EXCLUDED.mtime,
+            container        = EXCLUDED.container,
+            duration_seconds = EXCLUDED.duration_seconds,
+            bitrate          = EXCLUDED.bitrate,
+            video_codec      = EXCLUDED.video_codec,
+            width            = EXCLUDED.width,
+            height           = EXCLUDED.height,
+            frame_rate       = EXCLUDED.frame_rate,
+            audio_codec      = EXCLUDED.audio_codec,
+            audio_channels   = EXCLUDED.audio_channels,
+            subtitle_langs   = EXCLUDED.subtitle_langs,
+            probe            = EXCLUDED.probe,
+            status           = EXCLUDED.status,
+            error_message    = EXCLUDED.error_message,
+            scanned_at       = now()
+        "#,
+    )
+    .bind(library.id)
+    .bind(work_id)
+    .bind(&path_str)
+    .bind(&filename)
+    .bind(size_bytes)
+    .bind(mtime)
+    .bind(probed.as_ref().and_then(|p| p.container.clone()))
+    .bind(probed.as_ref().and_then(|p| p.duration_seconds))
+    .bind(probed.as_ref().and_then(|p| p.bitrate))
+    .bind(probed.as_ref().and_then(|p| p.video_codec.clone()))
+    .bind(probed.as_ref().and_then(|p| p.width))
+    .bind(probed.as_ref().and_then(|p| p.height))
+    .bind(probed.as_ref().and_then(|p| p.frame_rate))
+    .bind(probed.as_ref().and_then(|p| p.audio_codec.clone()))
+    .bind(probed.as_ref().and_then(|p| p.audio_channels))
+    .bind(
+        probed
+            .as_ref()
+            .map(|p| p.subtitle_langs.clone())
+            .unwrap_or_default(),
+    )
+    .bind(probed.as_ref().map(|p| p.raw.clone()))
+    .bind(status)
+    .bind(error_message.clone())
+    .execute(pool)
+    .await?;
+
+    if let Some(msg) = error_message {
+        anyhow::bail!(msg);
+    }
+
+    Ok(if existing.is_some() {
+        Outcome::Updated
+    } else {
+        Outcome::Added
+    })
+}
+
+async fn create_work(
+    pool: &PgPool,
+    library: &Library,
+    guess: &guess::Guess,
+    duration_seconds: Option<f64>,
+) -> anyhow::Result<Uuid> {
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO work (kind, title, year, season_number, episode_number, runtime_seconds)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+    )
+    .bind(guess.kind(&library.default_kind))
+    .bind(&guess.title)
+    .bind(guess.year)
+    .bind(guess.season)
+    .bind(guess.episode)
+    .bind(duration_seconds.map(|d| d.round() as i32))
+    .fetch_one(pool)
+    .await?;
+    Ok(id)
+}
