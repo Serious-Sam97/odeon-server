@@ -35,7 +35,16 @@ pub async fn serve(
     key: &Path,
     app: Router,
 ) -> anyhow::Result<()> {
-    let config = OpenSSLConfig::from_pem_file(cert, key).map_err(|e| {
+    // `from_pem_chain_file`, NÃO `from_pem_file`: o primeiro chama
+    // `set_certificate_chain_file` e manda a cadeia inteira; o segundo chama
+    // `set_certificate_file` e manda só a folha.
+    //
+    // O arquivo do `tailscale cert` tem 4 certificados (folha → YE2 → Root YE →
+    // ISRG Root X2). Mandando só a folha, o cliente não acha o emissor e a
+    // conexão falha com "unable to verify the first certificate" — navegador de
+    // desktop às vezes salva pescando o intermediário por AIA, mas Android TV
+    // não perdoa. Era o caminho documentado do projeto quebrando na prática.
+    let config = OpenSSLConfig::from_pem_chain_file(cert, key).map_err(|e| {
         anyhow::anyhow!(
             "certificado inválido ({} / {}): {e}",
             cert.display(),

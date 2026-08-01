@@ -31,8 +31,17 @@ pub async fn start(
     let status = state.scrub.clone();
     let bus = state.events.clone();
 
+    let job = crate::jobs::Job::start(
+        &state.pool,
+        "scrub",
+        json!({ "force": params.force }),
+        None,
+    )
+    .await;
+    let job_id = job.as_ref().map(|j| j.id);
+
     tokio::spawn(async move {
-        scrub::generate_all(pool, dir, status.clone(), params.force).await;
+        scrub::generate_all(pool, dir, status.clone(), params.force, job).await;
         let finished = status.lock().await.clone();
         crate::events::publish(
             &bus,
@@ -43,11 +52,22 @@ pub async fn start(
         );
     });
 
-    Ok(Json(json!({ "started": true, "force": params.force })))
+    Ok(Json(json!({ "started": true, "force": params.force, "job_id": job_id })))
 }
 
+/// Formato inalterado; sobrevive ao restart lendo o último job.
 pub async fn status(State(state): State<AppState>) -> Json<scrub::ScrubStatus> {
-    Json(state.scrub.lock().await.clone())
+    let current = state.scrub.lock().await.clone();
+    if current.started_at.is_some() {
+        return Json(current);
+    }
+    if let Some(job) = crate::jobs::latest(&state.pool, "scrub").await {
+        if let Ok(mut anterior) = serde_json::from_value::<scrub::ScrubStatus>(job.progress) {
+            anterior.running = false;
+            return Json(anterior);
+        }
+    }
+    Json(current)
 }
 
 /// Geometria da folha de sprites. O player usa isto pra calcular a célula:

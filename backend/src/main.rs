@@ -5,6 +5,7 @@ mod cors;
 mod curation;
 mod error;
 mod events;
+mod jobs;
 mod metadata;
 mod models;
 mod routes;
@@ -61,6 +62,19 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("falha ao rodar as migrations")?;
     tracing::info!("migrations em dia");
+
+    // Fecha o que ficou pendurado de uma execução anterior.
+    //
+    // Antes de servir, e não depois: o índice único de job ativo bloquearia
+    // qualquer operação nova enquanto o job morto continuasse "rodando" — o
+    // servidor recusaria varrer alegando varredura em andamento, para sempre.
+    let interrompidos = jobs::recover(&pool).await;
+    if interrompidos > 0 {
+        tracing::warn!(
+            interrompidos,
+            "operações que estavam em andamento quando o processo foi encerrado"
+        );
+    }
 
     seed_default_library(&pool, &config).await?;
 

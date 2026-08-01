@@ -12,7 +12,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-odeon}
       POSTGRES_DB: odeon
     ports:
-      - "${DB_PORT:-5433}:5432"
+      # Só loopback. O banco não tem por que ser alcançável pela LAN nem pela
+      # tailnet — quem fala com ele é o container `api`, pela rede interna do
+      # compose, que não passa por aqui.
+      - "127.0.0.1:${DB_PORT:-5433}:5432"
     volumes:
       # PG18+ quer o mount na raiz, não em /data — ele cria o subdiretório por
       # major version, o que deixa `pg_upgrade --link` viável no futuro.
@@ -56,17 +59,37 @@ services:
       - "${API_PORT:-8080}:8080"
       - "${HTTPS_PORT:-8443}:8443"
     volumes:
-      - ./backend:/app
+      # `z` = rótulo SELinux compartilhado (container_file_t). Sem ele, no
+      # Fedora, o container sobe mas a pasta aparece VAZIA, sem erro claro.
+      - ./backend:/app:z
       - cargo-registry:/usr/local/cargo/registry
       - cargo-target:/app/target
+      # Os discos de mídia NÃO levam `z`: são exFAT, que não guarda xattr, então
+      # não há rótulo por arquivo pra aplicar — o relabel falharia. O rótulo
+      # deles vem do mount (`context=` no /etc/fstab). Ver README desta máquina.
       - ${MEDIA_PATH}:/media:ro
       # Discos extras, opcionais. Apontam pra si mesmos quando não usados —
       # o servidor descarta raiz que não existe ou está vazia.
       - ${MEDIA_PATH_2:-${MEDIA_PATH}}:/media2:ro
       - ${MEDIA_PATH_3:-${MEDIA_PATH}}:/media3:ro
       # Onde ficam cert.crt/cert.key. Read-only: o servidor só lê.
-      - ./certs:/certs:ro
+      - ./certs:/certs:ro,z
       - cache:/cache
+    # GPU por CDI. A detecção de encoder roda no BOOT
+    # (backend/src/transcode/hwaccel.rs), então a placa precisa estar visível
+    # antes de o processo subir.
+    #
+    # Por que CDI e não `deploy.resources.reservations.devices` com
+    # `capabilities: [gpu, video]`: aquela forma exige o runtime `nvidia`
+    # registrado no daemon, o que obriga a reiniciar o dockerd — e nesta máquina
+    # isso derruba ~35 containers (Jellyfin, ErsatzTV, os stacks de trabalho).
+    # O Docker 29 lê CDI nativamente, sem daemon.json e sem restart.
+    #
+    # O spec /etc/cdi/nvidia.yaml já injeta libnvidia-encode.so.1 e libcuda.so.1
+    # — que é o conteúdo da capability `video`, a que falta quando se pede só
+    # `gpu` e o h264_nvenc aparece em `ffmpeg -encoders` mas morre no encode.
+    devices:
+      - nvidia.com/gpu=all
 
   web:
     build:
@@ -81,11 +104,14 @@ services:
       # host, esquema igual, porta 8080/8443). Assim o mesmo build funciona
       # em HTTP e em HTTPS, e o usuário pode trocar o servidor na tela de login.
       VITE_API_URL: ${VITE_API_URL:-}
+      ODEON_TLS_CERT: ${ODEON_TLS_CERT:-}
+      ODEON_TLS_KEY: ${ODEON_TLS_KEY:-}
     ports:
       - "${WEB_PORT:-5174}:5173"
     volumes:
-      - ./web:/app
+      - ./web:/app:z
       - web-modules:/app/node_modules
+      - ./certs:/certs:ro,z
 
 volumes:
   db-data:

@@ -1,3 +1,7 @@
 # Certificado e chave nunca vão pro repositório.
 *
 !.gitignore
+# ...mas os scripts que MEXEM neles, sim. Sem esta linha o `*` acima engole
+# qualquer .sh daqui — foi o que aconteceu com o `dev-cert.sh` citado no README
+# e no DESIGN §10c: ele é referenciado na documentação e não existe no clone.
+!*.sh

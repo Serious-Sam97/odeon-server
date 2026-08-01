@@ -162,6 +162,10 @@ pub struct ReviewWork {
     pub episode_number: Option<i32>,
     pub match_state: String,
     pub match_confidence: Option<f32>,
+    /// Por que a obra está na fila, quando o motivo não veio de um candidato —
+    /// propagação de escopo, ou identificação desfeita por contradizer o
+    /// provider. Ver a coluna homônima na migração 0008.
+    pub match_reasons: serde_json::Value,
     pub filename: String,
 }
 
@@ -188,6 +192,203 @@ pub struct ReviewItem {
 #[derive(Debug, Deserialize)]
 pub struct ConfirmMatch {
     pub candidate_id: Uuid,
+
+    /// Até onde a decisão vale:
+    ///   `work`      — só esta obra (padrão, e o comportamento de sempre)
+    ///   `directory` — as obras da MESMA pasta
+    ///   `series`    — a subárvore da série (sobe uma pasta se esta é temporada)
+    ///
+    /// Sempre explícito: propagar por inferência é como se apaga uma biblioteca
+    /// inteira sem perceber.
+    #[serde(default = "so_esta")]
+    pub apply_to: String,
+
+    /// Mostra o que aconteceria sem escrever. A interface pede isto antes de
+    /// oferecer o botão quando o escopo passa de uma obra.
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+fn so_esta() -> String {
+    "work".to_string()
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BulkMatch {
+    /// Pares (obra, candidato). Cada obra escolhe o SEU candidato — não há
+    /// "aplicar o mesmo id a todas", porque candidato é por obra.
+    pub items: Vec<BulkMatchItem>,
+    #[serde(default)]
+    pub dry_run: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BulkMatchItem {
+    pub work_id: Uuid,
+    pub candidate_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct BulkState {
+    pub work_ids: Vec<Uuid>,
+    /// `ignored` para material extra; `unmatched` para devolver à fila.
+    pub state: String,
+    /// Vira `match_reasons` — quem abrir a fila depois precisa saber por quê.
+    pub reason: Option<String>,
+}
+
+// --- escopo de identificação por pasta ------------------------------------
+
+#[derive(Debug, Deserialize)]
+pub struct ScopeQuery {
+    /// Só pastas desta biblioteca.
+    pub library: Option<Uuid>,
+    /// Substring do caminho — é como se acha "Naruto" entre 578 pastas.
+    pub q: Option<String>,
+    /// `files` (padrão): as pastas que resolvem mais arquivos primeiro. É a
+    /// ordenação que faz a fila encolher rápido. `path` pra varrer em ordem.
+    pub sort: Option<String>,
+    #[serde(default = "cem")]
+    pub limit: i64,
+    #[serde(default)]
+    pub offset: i64,
+}
+
+fn cem() -> i64 {
+    100
+}
+
+/// Uma pasta com trabalho pendente, e tudo que ajuda a decidir sobre ela.
+#[derive(Debug, Serialize)]
+pub struct ScopeRow {
+    pub dir_path: String,
+    pub library_id: Uuid,
+    pub library_name: String,
+    /// Arquivos ainda não identificados aqui — o que esta decisão resolve.
+    pub pendentes: i64,
+    pub unmatched: i64,
+    pub needs_review: i64,
+    /// Já identificados na mesma pasta. Quando > 0, o `sibling_match` abaixo
+    /// costuma ser a resposta.
+    pub ja_identificados: i64,
+    pub exemplos: Vec<String>,
+    /// O que o parser entende do NOME DA PASTA — normalmente o nome da série.
+    pub titulo_sugerido: String,
+    /// A obra que os irmãos já casados apontam. Não é palpite: é o que o
+    /// próprio acervo já decidiu para arquivos vizinhos.
+    pub sibling_match: Option<SiblingMatch>,
+    /// Decisão humana já registrada para esta pasta.
+    pub escopo: Option<ScopeRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewQuery {
+    /// `needs_review` (padrão), `unmatched`, ou os dois separados por vírgula.
+    pub state: Option<String>,
+    pub library: Option<Uuid>,
+    /// Prefixo de caminho — fatia a fila por pasta.
+    pub dir: Option<String>,
+    pub kind: Option<String>,
+    /// Separa dois problemas que a fila hoje confunde: "o matcher achou opções
+    /// e não sabe qual" de "o matcher não achou nada". São filas diferentes,
+    /// com ações diferentes — escolher versus corrigir o nome.
+    pub has_candidates: Option<bool>,
+    /// Substring do nome do arquivo ou do título entendido.
+    pub q: Option<String>,
+    /// `confidence` (padrão) põe primeiro o que está mais perto do limiar, que
+    /// é o mais barato de resolver.
+    pub sort: Option<String>,
+    #[serde(default = "cinquenta")]
+    pub limit: i64,
+    #[serde(default)]
+    pub offset: i64,
+}
+
+fn cinquenta() -> i64 {
+    50
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RepairParams {
+    #[serde(default = "sim")]
+    pub dry_run: bool,
+    /// Devolve pra fila as obras cujo episódio o provider diz não existir.
+    ///
+    /// Separado do reparo de título de propósito: consertar um texto é
+    /// inofensivo, desfazer uma identificação não é. Quem chama tem que pedir.
+    #[serde(default)]
+    pub requeue: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScopeSearch {
+    pub dir_path: String,
+    /// Sobrescreve o título sugerido pela pasta.
+    pub query: Option<String>,
+    /// `auto` (padrão), `tmdb` ou `anilist`.
+    pub provider: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ScopeIdentify {
+    pub library_id: Uuid,
+    pub dir_path: String,
+    /// Vale para a subárvore — série com pastas de temporada dentro.
+    #[serde(default)]
+    pub recursive: bool,
+
+    pub provider: String,
+    pub provider_id: String,
+    pub provider_kind: String,
+
+    pub season_number: Option<i32>,
+    #[serde(default = "sazonal")]
+    pub numbering: String,
+    #[serde(default)]
+    pub absolute_offset: i32,
+    pub note: Option<String>,
+
+    /// Padrão `true`. Uma operação que escreve centenas de obras mostra o que
+    /// vai fazer antes de fazer — §8b aplicado à escala.
+    #[serde(default = "sim")]
+    pub dry_run: bool,
+
+    /// Inclui o que já está `auto`/`confirmed`.
+    ///
+    /// Desligado por padrão porque `confirmed` é decisão humana e a máquina não
+    /// a desfaz (§8b). Existe para o caso legítimo de REDECIDIR a pasta — a
+    /// série escolhida estava errada, ou a numeração era outra — e aí quem
+    /// desfaz é a mesma pessoa que decidiu.
+    #[serde(default)]
+    pub force: bool,
+}
+
+fn sazonal() -> String {
+    "seasonal".to_string()
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SiblingMatch {
+    pub provider: String,
+    pub provider_id: String,
+    pub titulo: String,
+    pub obras: i64,
+}
+
+#[derive(Debug, Clone, Serialize, sqlx::FromRow)]
+pub struct ScopeRecord {
+    pub id: Uuid,
+    pub library_id: Uuid,
+    pub dir_path: String,
+    pub recursive: bool,
+    pub provider: String,
+    pub provider_id: String,
+    pub provider_kind: String,
+    pub season_number: Option<i32>,
+    pub numbering: String,
+    pub absolute_offset: i32,
+    pub note: Option<String>,
+    pub decided_at: DateTime<Utc>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -324,4 +525,16 @@ pub struct MatchRequest {
     /// Refaz até o que já foi casado automaticamente. Nunca toca no confirmado.
     #[serde(default)]
     pub force: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReparseParams {
+    /// Padrão `true`: uma operação que reescreve milhares de linhas mostra o
+    /// que vai fazer antes de fazer. Escrever exige `?dry_run=false` explícito.
+    #[serde(default = "sim")]
+    pub dry_run: bool,
+}
+
+fn sim() -> bool {
+    true
 }

@@ -20,7 +20,7 @@ const VIDEO_EXTS: &[&str] = &[
 /// Abaixo disso é sample, trailer ou thumbnail — não é obra.
 const MIN_SIZE_BYTES: u64 = 1024 * 1024;
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
 pub struct ScanStatus {
     pub running: bool,
     pub library: Option<String>,
@@ -44,7 +44,11 @@ enum Outcome {
 
 /// Varre todas as bibliotecas. Só roda uma por vez; chamada concorrente é no-op.
 /// Devolve `false` se já havia um scan em andamento.
-pub async fn scan_all(pool: PgPool, status: SharedStatus) -> bool {
+pub async fn scan_all(
+    pool: PgPool,
+    status: SharedStatus,
+    job: Option<crate::jobs::Job>,
+) -> bool {
     {
         let mut s = status.lock().await;
         if s.running {
@@ -73,8 +77,12 @@ pub async fn scan_all(pool: PgPool, status: SharedStatus) -> bool {
         }
     };
 
+    let mut cancelado = false;
     for library in &libraries {
-        scan_library(&pool, library, &status, started_at).await;
+        scan_library(&pool, library, &status, started_at, job.as_ref(), &mut cancelado).await;
+        if cancelado {
+            break;
+        }
     }
 
     let mut s = status.lock().await;
@@ -87,8 +95,13 @@ pub async fn scan_all(pool: PgPool, status: SharedStatus) -> bool {
         updated = s.files_updated,
         missing = s.files_missing,
         errors = s.errors.len(),
+        cancelado,
         "scan concluído"
     );
+    if let Some(j) = job {
+        j.finish(&*s, if cancelado { "cancelled" } else { "succeeded" }, None)
+            .await;
+    }
     true
 }
 
@@ -97,6 +110,8 @@ async fn scan_library(
     library: &Library,
     status: &SharedStatus,
     started_at: DateTime<Utc>,
+    job: Option<&crate::jobs::Job>,
+    cancelado: &mut bool,
 ) {
     status.lock().await.library = Some(library.name.clone());
     tracing::info!(library = %library.name, root = %library.root_path, "varrendo");
@@ -130,6 +145,21 @@ async fn scan_library(
                 let mut s = status.lock().await;
                 if s.errors.len() < 100 {
                     s.errors.push(format!("{}: {e}", path.display()));
+                }
+            }
+        }
+
+        // O arquivo corrente terminou de ser gravado: é ponto seguro pra parar.
+        // A cada 50 porque `ffprobe` é lento e o custo da consulta some no meio.
+        if let Some(j) = job {
+            let vistos = status.lock().await.files_seen;
+            if vistos % 50 == 0 {
+                let atual = status.lock().await.clone();
+                j.tick(&atual, vistos as i64, None).await;
+                if j.cancelled().await {
+                    *cancelado = true;
+                    tracing::info!(vistos, "varredura cancelada a pedido");
+                    return;
                 }
             }
         }
@@ -222,7 +252,16 @@ async fn process_file(pool: &PgPool, library: &Library, path: &Path) -> anyhow::
         (None, previous) => previous,
         (Some(_), Some(previous)) => Some(previous),
         (Some(p), None) => {
-            let guess = guess::guess_from_filename(&filename);
+            // `guess_from_path` e não `guess_from_filename`: é aqui que
+            // `season_number` e `episode_number` da obra são gravados, e o
+            // nome do arquivo sozinho frequentemente não os tem
+            // (`Show/Season 1/01.mkv`). Sem o contexto do diretório a obra
+            // nasce sem numeração e nenhum caminho posterior a corrige.
+            let guess = guess::guess_from_path(
+                path,
+                Path::new(&library.root_path),
+                library.default_kind == "episode",
+            );
             Some(create_work(pool, library, &guess, p.duration_seconds).await?)
         }
     };

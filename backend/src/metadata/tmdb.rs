@@ -200,6 +200,39 @@ impl Tmdb {
         )
         .await
     }
+
+    /// A temporada INTEIRA numa chamada.
+    ///
+    /// Identificar uma temporada de 24 episódios um a um custa 24 requisições
+    /// que devolvem, somadas, exatamente o que esta devolve sozinha. Numa pasta
+    /// como Naruto Shippuden (499 arquivos) a diferença é 21 chamadas contra
+    /// 499 — deixa de ser aceitável esperar.
+    pub async fn season(&self, series_id: &str, season: i32) -> anyhow::Result<SeasonDetail> {
+        self.get(&format!("/tv/{series_id}/season/{season}"), &[])
+            .await
+    }
+
+    /// A série pelo ID, já como `Candidate`.
+    ///
+    /// A busca por texto devolve `Candidate`; o escopo por pasta já SABE o id
+    /// (veio da decisão humana ou dos irmãos já casados) e precisa da mesma
+    /// estrutura pra reusar o `apply_candidate` — sem duplicar a lógica de
+    /// coleção, artwork e tags.
+    pub async fn tv_by_id(&self, id: &str) -> anyhow::Result<Candidate> {
+        let hit: TvHit = self.get(&format!("/tv/{id}"), &[]).await?;
+        let genres = self.genre_map().await;
+        Ok(hit.into_candidate(&genres))
+    }
+
+    /// As temporadas da série, com quantos episódios cada uma tem.
+    ///
+    /// É o índice que traduz numeração ABSOLUTA (a que fansub usa) para o par
+    /// temporada/episódio que o provider entende: somando `episode_count` até
+    /// passar do número absoluto, chega-se na temporada.
+    pub async fn series_seasons(&self, series_id: &str) -> anyhow::Result<Vec<SeasonSummary>> {
+        let detail: SeriesDetail = self.get(&format!("/tv/{series_id}"), &[]).await?;
+        Ok(detail.seasons)
+    }
 }
 
 /// Quantos nomes de elenco guardar. Além disso vira ruído: ninguém procura o
@@ -299,8 +332,14 @@ struct TvHit {
     overview: Option<String>,
     poster_path: Option<String>,
     backdrop_path: Option<String>,
+    /// A BUSCA devolve os gêneros como ids…
     #[serde(default)]
     genre_ids: Vec<i64>,
+    /// …e `/tv/{id}` devolve como objetos. Aceitar as duas formas é o que
+    /// permite reusar esta struct pro `tv_by_id` sem perder as tags de gênero,
+    /// que alimentam o filtro do M2 e a curadoria do M5.
+    #[serde(default)]
+    genres: Vec<Genre>,
     #[serde(default)]
     popularity: f32,
 }
@@ -317,6 +356,39 @@ impl EpisodeDetail {
     pub fn still_url(&self) -> Option<String> {
         self.still_path.as_ref().map(|p| format!("{IMG}/w780{p}"))
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SeasonDetail {
+    #[serde(default)]
+    pub episodes: Vec<SeasonEpisode>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SeasonEpisode {
+    pub episode_number: i32,
+    pub name: Option<String>,
+    pub overview: Option<String>,
+    pub still_path: Option<String>,
+}
+
+impl SeasonEpisode {
+    pub fn still_url(&self) -> Option<String> {
+        self.still_path.as_ref().map(|p| format!("{IMG}/w780{p}"))
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct SeriesDetail {
+    #[serde(default)]
+    seasons: Vec<SeasonSummary>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SeasonSummary {
+    pub season_number: i32,
+    #[serde(default)]
+    pub episode_count: i32,
 }
 
 /// "2017-10-04" → 2017
@@ -368,7 +440,11 @@ impl TvHit {
             year: year_of(&self.first_air_date),
             poster_url: image(&self.poster_path, "w500"),
             backdrop_url: image(&self.backdrop_path, "w1280"),
-            genres: names_of(&self.genre_ids, genres),
+            genres: if self.genres.is_empty() {
+                names_of(&self.genre_ids, genres)
+            } else {
+                self.genres.iter().map(|g| g.name.clone()).collect()
+            },
             title: self.name,
             original_title: self.original_name,
             overview: non_empty(self.overview),

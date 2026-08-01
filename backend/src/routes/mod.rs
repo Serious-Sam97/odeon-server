@@ -5,11 +5,12 @@ pub mod graph;
 pub mod metadata;
 pub mod people;
 pub mod playback;
+pub mod scopes;
 pub mod scrub;
 pub mod stream;
 pub mod works;
 
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
@@ -44,6 +45,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/browse", get(browse::browse))
         .route("/api/scan", post(start_scan))
         .route("/api/scan/status", get(scan_status))
+        // Histórico e controle das operações longas — ver o módulo `jobs`.
+        .route("/api/jobs", get(list_jobs))
+        .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/works", get(works::list))
         .route("/api/works/{id}", get(works::detail))
         .route("/api/works/{id}/progress", post(works::progress))
@@ -53,10 +57,30 @@ pub fn router(state: AppState) -> Router {
         .route("/api/match", post(metadata::start))
         .route("/api/match/status", get(metadata::status))
         .route("/api/review", get(metadata::review))
+        // Re-deriva o parse do que ainda não foi identificado. `dry_run` por
+        // padrão — ver o comentário no handler.
+        .route("/api/maintenance/reparse", post(metadata::reparse))
+        .route(
+            "/api/maintenance/repair-episode-titles",
+            post(metadata::repair_episode_titles),
+        )
+        // A pasta como unidade de decisão — ver o módulo `scopes`.
+        .route("/api/review/scopes", get(scopes::list))
+        .route("/api/scopes/search", post(scopes::search))
+        .route("/api/scopes/identify", post(scopes::identify))
         .route("/api/works/{id}/candidates", get(metadata::candidates))
         .route("/api/works/{id}/search", post(metadata::manual_search))
         .route("/api/works/{id}/match", post(metadata::confirm))
+        // Lote. Ver os handlers: cada obra leva o SEU candidato, e mudança
+        // de estado em massa só aceita os estados que não desfazem match bom.
+        .route("/api/works/bulk/match", post(metadata::bulk_match))
+        .route("/api/works/bulk/state", post(metadata::bulk_state))
         .route("/api/works/{id}/reset", post(metadata::reset))
+        // Correção humana do parse, persistida — ver o handler.
+        .route(
+            "/api/works/{id}/parse",
+            post(metadata::set_parse).delete(metadata::clear_parse),
+        )
         // --- M2: o grafo ---
         .route("/api/people", get(people::list))
         .route("/api/people/{id}", get(people::detail))
@@ -121,6 +145,33 @@ pub fn router(state: AppState) -> Router {
             get(playback::subtitle_vtt),
         )
         .with_state(state)
+}
+
+/// O histórico das operações longas. É o que responde "quando foi a última
+/// varredura?" e "o que estava rodando quando o servidor caiu?".
+async fn list_jobs(
+    State(state): State<AppState>,
+    AdminUser(_): AdminUser,
+) -> AppResult<Json<Value>> {
+    Ok(Json(json!(crate::jobs::list(&state.pool, 50).await)))
+}
+
+/// Pede o cancelamento. Não mata nada: marca, e o worker para no próximo ponto
+/// seguro — interromper no meio de uma gravação deixaria estado pela metade.
+async fn cancel_job(
+    State(state): State<AppState>,
+    AdminUser(_): AdminUser,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> AppResult<Json<Value>> {
+    let pedido = crate::jobs::request_cancel(&state.pool, id).await;
+    Ok(Json(json!({
+        "ok": pedido,
+        "detalhe": if pedido {
+            "vai parar no próximo item — o corrente termina de gravar"
+        } else {
+            "esse job não está rodando"
+        }
+    })))
 }
 
 async fn health(State(state): State<AppState>) -> AppResult<Json<Value>> {
@@ -206,9 +257,19 @@ async fn create_library(
     Ok(Json(library))
 }
 
+/// Varre. Com `?then=match`, encadeia a identificação em seguida.
+///
+/// O encadeamento existe porque a sequência é sempre a mesma e a espera é
+/// longa: varrer 17 mil arquivos leva uma hora, identificar leva mais, e sem
+/// isto alguém precisa estar presente no meio pra apertar o segundo botão.
+///
+/// A identificação só começa se a varredura **terminou de verdade**. Depois de
+/// um cancelamento ou de uma falha, encadear seria identificar sobre um
+/// acervo pela metade.
 async fn start_scan(
     State(state): State<AppState>,
     AdminUser(_): AdminUser,
+    Query(params): Query<ScanRequest>,
 ) -> AppResult<Json<Value>> {
     if state.scan.lock().await.running {
         return Ok(Json(json!({ "started": false, "reason": "scan já em andamento" })));
@@ -216,9 +277,15 @@ async fn start_scan(
 
     let pool = state.pool.clone();
     let status = state.scan.clone();
+    let job = crate::jobs::Job::start(&state.pool, "scan", json!({}), None).await;
+    let job_id = job.as_ref().map(|j| j.id);
+
+    let encadear = params.then.as_deref() == Some("match");
     let bus = state.events.clone();
+    let depois = state.clone();
+
     tokio::spawn(async move {
-        scanner::scan_all(pool, status.clone()).await;
+        scanner::scan_all(pool, status.clone(), job).await;
         let finished = status.lock().await.clone();
         crate::events::publish(
             &bus,
@@ -227,9 +294,56 @@ async fn start_scan(
                 updated: finished.files_updated,
             },
         );
+
+        if !encadear {
+            return;
+        }
+
+        // Só encadeia se a varredura chegou ao fim. `finished_at` é carimbado
+        // tanto no sucesso quanto no cancelamento, então quem responde por isso
+        // é o ESTADO do job, não a existência da data.
+        let concluiu = crate::jobs::latest(&depois.pool, "scan")
+            .await
+            .map(|j| j.state == "succeeded")
+            .unwrap_or(false);
+        if !concluiu {
+            tracing::info!("varredura não concluiu — identificação não encadeada");
+            return;
+        }
+
+        let job_match =
+            crate::jobs::Job::start(&depois.pool, "match", json!({ "chained": true }), None).await;
+        tracing::info!("varredura concluída — identificação encadeada");
+        crate::metadata::run_matching(
+            depois.pool.clone(),
+            depois.providers.clone(),
+            depois.config.artwork_dir.clone(),
+            depois.matching.clone(),
+            false,
+            job_match,
+        )
+        .await;
+        let m = depois.matching.lock().await.clone();
+        crate::events::publish(
+            &bus,
+            crate::events::AppEvent::MatchFinished {
+                auto: m.matched_auto,
+                needs_review: m.needs_review,
+            },
+        );
     });
 
-    Ok(Json(json!({ "started": true })))
+    Ok(Json(json!({
+        "started": true,
+        "job_id": job_id,
+        "then": if encadear { Some("match") } else { None },
+    })))
+}
+
+#[derive(serde::Deserialize)]
+struct ScanRequest {
+    /// `match` encadeia a identificação depois da varredura.
+    then: Option<String>,
 }
 
 /// Apagar biblioteca leva junto arquivos e obras (cascade no schema). O
@@ -310,6 +424,23 @@ async fn update_library(
         .ok_or(crate::error::AppError::NotFound)
 }
 
+/// Mesmo formato de sempre; a diferença é sobreviver ao restart.
+///
+/// Sem isto, o `systemctl stop docker` que matou uma varredura de 17 mil
+/// arquivos deixava a interface dizendo "nunca rodou" — que foi exatamente o
+/// que aconteceu na implantação deste servidor.
 async fn scan_status(State(state): State<AppState>) -> Json<scanner::ScanStatus> {
-    Json(state.scan.lock().await.clone())
+    let current = state.scan.lock().await.clone();
+    if current.started_at.is_some() {
+        return Json(current);
+    }
+
+    if let Some(job) = crate::jobs::latest(&state.pool, "scan").await {
+        if let Ok(mut anterior) = serde_json::from_value::<scanner::ScanStatus>(job.progress) {
+            // O processo que executava aquilo não existe mais.
+            anterior.running = false;
+            return Json(anterior);
+        }
+    }
+    Json(current)
 }

@@ -37,7 +37,7 @@ pub struct SpriteInfo {
     pub frame_count: i32,
 }
 
-#[derive(Debug, Clone, Default, Serialize)]
+#[derive(Debug, Clone, Default, Serialize, serde::Deserialize)]
 pub struct ScrubStatus {
     pub running: bool,
     pub current: Option<String>,
@@ -70,6 +70,7 @@ pub async fn generate_all(
     scrub_dir: PathBuf,
     status: SharedScrubStatus,
     force: bool,
+    job: Option<crate::jobs::Job>,
 ) -> bool {
     {
         let mut s = status.lock().await;
@@ -117,7 +118,9 @@ pub async fn generate_all(
     };
 
     status.lock().await.total = pending.len() as u64;
-    tracing::info!(total = pending.len(), "geração de sprites iniciada");
+    let total = pending.len();
+    let mut cancelado = false;
+    tracing::info!(total, "geração de sprites iniciada");
 
     for file in pending {
         status.lock().await.current = Some(file.path.clone());
@@ -133,13 +136,36 @@ pub async fn generate_all(
                 }
             }
         }
+
+        // Checa a cada arquivo, não a cada N: um sprite leva MINUTOS (o ffmpeg
+        // decodifica o arquivo inteiro), então a consulta ao banco é ruído
+        // perto disso — e esperar 50 arquivos pra parar seria uma hora.
+        if let Some(j) = &job {
+            let atual = status.lock().await.clone();
+            let feitos = (atual.done + atual.failed) as i64;
+            j.tick(&atual, feitos, Some(total as i64)).await;
+            if j.cancelled().await {
+                cancelado = true;
+                tracing::info!(feitos, "geração de sprites cancelada a pedido");
+                break;
+            }
+        }
     }
 
     let mut s = status.lock().await;
     s.running = false;
     s.current = None;
     s.finished_at = Some(Utc::now());
-    tracing::info!(done = s.done, failed = s.failed, "geração de sprites concluída");
+    tracing::info!(
+        done = s.done,
+        failed = s.failed,
+        cancelado,
+        "geração de sprites concluída"
+    );
+    if let Some(j) = job {
+        j.finish(&*s, if cancelado { "cancelled" } else { "succeeded" }, None)
+            .await;
+    }
     true
 }
 
