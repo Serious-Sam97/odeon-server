@@ -41,6 +41,7 @@ impl User {
 
 #[derive(Debug, Clone, Serialize, sqlx::FromRow)]
 pub struct SessionRow {
+    pub id: Uuid,
     pub device_label: Option<String>,
     pub user_agent: Option<String>,
     pub created_at: DateTime<Utc>,

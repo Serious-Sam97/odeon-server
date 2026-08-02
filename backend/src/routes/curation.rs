@@ -59,13 +59,35 @@ pub async fn for_you(
 
 /// O perfil sozinho — pra você poder olhar no que o sistema acha que você gosta.
 /// Recomendação que não se deixa inspecionar é adivinhação.
+/// O perfil, mais a contagem de votos explícitos.
+///
+/// O `TasteProfile` mede o que veio do comportamento; o ♥/✕ é a outra metade,
+/// e é a única que existe antes de alguém terminar alguma coisa. A tela do
+/// "para você" decide entre frio, morno e quente com as duas — e sem o voto
+/// aqui ela não teria como saber que a calibração já rendeu.
 pub async fn taste(
     State(state): State<AppState>,
     user: AuthUser,
-) -> AppResult<Json<TasteProfile>> {
-    Ok(Json(
-        curation::taste::build(&state.pool, user.id()).await?,
-    ))
+) -> AppResult<Json<Value>> {
+    let perfil = curation::taste::build(&state.pool, user.id()).await?;
+
+    let (curtidas, bloqueadas): (i64, i64) = sqlx::query_as(
+        "SELECT count(*) FILTER (WHERE verdict = 'love'),
+                count(*) FILTER (WHERE verdict = 'block')
+         FROM work_feedback WHERE user_id = $1",
+    )
+    .bind(user.id())
+    .fetch_one(&state.pool)
+    .await?;
+
+    // `AppError` não converte de `serde_json::Error` — e serializar uma struct
+    // própria não falha, então o `expect` aqui é honesto.
+    let mut v = serde_json::to_value(perfil).expect("TasteProfile serializa");
+    if let Some(o) = v.as_object_mut() {
+        o.insert("curtidas".into(), json!(curtidas));
+        o.insert("bloqueadas".into(), json!(bloqueadas));
+    }
+    Ok(Json(v))
 }
 
 pub async fn similar(
@@ -146,4 +168,72 @@ pub async fn clear_feedback(
         .execute(&state.pool)
         .await?;
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Seis capas pra calibrar o gosto: uma por gênero, nunca votadas.
+///
+/// Existe porque o ♥/✕ é o **único sinal legível antes de alguém terminar
+/// alguma coisa** — e o acervo tinha 0 votos e 0 obras terminadas. Sem isso a
+/// tela de recomendação abre pedindo desculpa e não oferece saída.
+///
+/// A escolha é determinística no dia (`md5(dia || id)`), então a fileira não
+/// se rearranja a cada recarga — votar em algo que sumiu da tela é a forma
+/// mais rápida de a pessoa parar de votar.
+pub async fn calibrar(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> AppResult<Json<Vec<crate::models::WorkListItem>>> {
+    // `WorkListItem` e não `Recommendation`: a fileira só precisa da capa, e
+    // `Recommendation` embrulha um score que aqui não existe.
+    let itens = sqlx::query_as::<_, crate::models::WorkListItem>(
+        r#"
+        WITH um_por_genero AS (
+            SELECT DISTINCT ON (t.value) t.value AS genero, w.id
+            FROM work w
+            JOIN work_tag wt ON wt.work_id = w.id
+            JOIN tag t ON t.id = wt.tag_id
+            WHERE w.kind = 'movie'
+              AND t.namespace = 'genre'
+              AND w.artwork ? 'poster'
+              AND w.match_state IN ('auto', 'confirmed')
+              AND EXISTS (SELECT 1 FROM media_file m
+                           WHERE m.work_id = w.id AND m.status = 'probed')
+              -- já votada não volta: a fileira é pra ganhar sinal novo
+              AND NOT EXISTS (SELECT 1 FROM work_feedback f
+                               WHERE f.work_id = w.id AND f.user_id = $1)
+              AND NOT EXISTS (SELECT 1 FROM playback_state p
+                               WHERE p.work_id = w.id AND p.user_id = $1)
+            ORDER BY t.value, md5(current_date::text || w.id::text)
+        ),
+        -- Um filme tem vários gêneros: sem esta segunda passada a mesma capa
+        -- aparecia duas vezes na fileira.
+        escolhidas AS (
+            SELECT DISTINCT ON (id) id FROM um_por_genero ORDER BY id
+        )
+        SELECT w.id, w.kind, w.title, w.year, w.season_number, w.episode_number,
+               w.match_state, w.match_confidence, w.dominant_color,
+               w.artwork->>'poster' AS poster,
+               w.artwork->>'backdrop' AS backdrop,
+               w.artwork->>'still' AS still,
+               NULL::text AS series_title,
+               f.id AS media_file_id, f.duration_seconds, f.width, f.height,
+               f.video_codec, f.audio_codec, f.container, f.size_bytes,
+               NULL::float8 AS position_seconds, NULL::bool AS finished,
+               NULL::text[] AS tags
+        FROM escolhidas e
+        JOIN work w ON w.id = e.id
+        JOIN LATERAL (
+            SELECT m.* FROM media_file m
+            WHERE m.work_id = w.id AND m.status = 'probed'
+            ORDER BY m.size_bytes DESC LIMIT 1
+        ) f ON true
+        ORDER BY md5(current_date::text || w.id::text)
+        LIMIT 6
+        "#,
+    )
+    .bind(user.id())
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(itens))
 }

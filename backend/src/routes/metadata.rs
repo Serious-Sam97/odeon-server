@@ -1069,3 +1069,297 @@ fn view_of(guess: &Guess) -> GuessView {
         looks_like_anime: guess.looks_like_anime,
     }
 }
+
+/// Reparo: dá identidade às coleções-série que já existem.
+///
+/// O identificador só passou a enriquecer a série a partir desta versão. As
+/// 115 séries já no banco continuam como o matcher antigo as deixou: título,
+/// ano, e `overview` NULL, `external_ids` '{}', `artwork` '{}' em todas.
+///
+/// São duas correções na mesma passada, porque são a mesma causa:
+///
+///  1. **Sinopse e ids.** Um `GET /tv/{id}` por série — 114 chamadas, não uma
+///     por episódio.
+///
+///  2. **A arte.** O pôster que o provider devolve para um episódio é o da
+///     SÉRIE. Baixado por obra, o acervo guardou 18.004 arquivos para 1.429
+///     imagens distintas — 2,19 GB onde cabem 197 MB, uma imagem salva 553
+///     vezes. Aqui a série passa a ser dona do arquivo e os episódios apontam
+///     pra ele.
+///
+/// `dry_run` é o padrão, como no reparo de títulos: contar é inofensivo,
+/// reescrever 8.471 obras não é.
+///
+/// O arquivo órfão **não é apagado**: o reparo só relata quantos e quantos
+/// bytes ficaram sem dono. Apagar arquivo é decisão de quem administra, e
+/// `/api/maintenance/artwork-orfao` faz isso separado.
+pub async fn repair_series(
+    State(state): State<AppState>,
+    AdminUser(_): AdminUser,
+    Query(params): Query<crate::models::RepairParams>,
+) -> AppResult<Json<Value>> {
+    let tmdb = state
+        .providers
+        .tmdb
+        .clone()
+        .ok_or_else(|| AppError::BadRequest("TMDB_API_KEY não configurada".into()))?;
+
+    #[derive(sqlx::FromRow)]
+    struct Serie {
+        id: Uuid,
+        title: String,
+        provider_key: Option<String>,
+        overview: Option<String>,
+        poster: Option<String>,
+    }
+
+    let series: Vec<Serie> = sqlx::query_as(
+        "SELECT id, title, provider_key, overview, artwork->>'poster' AS poster
+         FROM collection
+         WHERE kind = 'series'
+           AND (overview IS NULL OR NOT (artwork ? 'poster'))
+         ORDER BY title",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    let mut enriquecidas = 0usize;
+    let mut sem_provider = 0usize;
+    let mut nao_tmdb = 0usize;
+    let mut falhou = 0usize;
+    let mut amostra = Vec::new();
+
+    for serie in &series {
+        let Some(chave) = serie.provider_key.as_deref() else {
+            sem_provider += 1;
+            continue;
+        };
+        let Some(("tmdb", id)) = chave.split_once(':').map(|(p, i)| (p, i)) else {
+            nao_tmdb += 1;
+            continue;
+        };
+
+        let candidato = match tmdb.tv_by_id(id).await {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(serie = %serie.title, error = %e, "tv_by_id falhou");
+                falhou += 1;
+                continue;
+            }
+        };
+
+        if params.dry_run {
+            enriquecidas += 1;
+            if amostra.len() < 8 {
+                amostra.push(json!({
+                    "serie": serie.title,
+                    "ganha_sinopse": serie.overview.is_none() && candidato.overview.is_some(),
+                    "ganha_arte": serie.poster.is_none() && candidato.poster_url.is_some(),
+                }));
+            }
+            continue;
+        }
+
+        // A arte da série, uma vez, com o nome da coleção.
+        let mut poster = serie.poster.clone();
+        let mut backdrop: Option<String> = None;
+        let mut cor = candidato.accent_color.clone();
+
+        if poster.is_none() {
+            if let Some(url) = &candidato.poster_url {
+                match crate::artwork::fetch(
+                    &state.providers.http,
+                    &state.config.artwork_dir,
+                    serie.id,
+                    "poster",
+                    url,
+                )
+                .await
+                {
+                    Ok(stored) => {
+                        poster = Some(stored.path);
+                        cor = cor.or(stored.dominant_color);
+                    }
+                    Err(e) => tracing::warn!(error = %e, "pôster da série não baixou"),
+                }
+            }
+        }
+        if let Some(url) = &candidato.backdrop_url {
+            if let Ok(stored) = crate::artwork::fetch(
+                &state.providers.http,
+                &state.config.artwork_dir,
+                serie.id,
+                "backdrop",
+                url,
+            )
+            .await
+            {
+                backdrop = Some(stored.path);
+            }
+        }
+
+        metadata::grava_identidade_da_serie(
+            &state.pool,
+            serie.id,
+            candidato.overview.as_deref(),
+            "tmdb",
+            id,
+            poster.as_deref(),
+            backdrop.as_deref(),
+            cor.as_deref(),
+        )
+        .await?;
+
+        enriquecidas += 1;
+        if amostra.len() < 8 {
+            amostra.push(json!({ "serie": serie.title, "sinopse": candidato.overview.is_some() }));
+        }
+    }
+
+    // --- os episódios passam a apontar pra arte da série --------------------
+    //
+    // Só onde a série TEM arte e a obra ainda aponta pro próprio arquivo. O
+    // `still` não é tocado: aquele é genuinamente por episódio.
+    let repontadas: i64 = if params.dry_run {
+        sqlx::query_scalar(
+            "SELECT count(*)
+             FROM work w
+             JOIN collection_item ci ON ci.work_id = w.id
+             JOIN collection temp ON temp.id = ci.collection_id AND temp.kind = 'season'
+             JOIN collection s ON s.id = temp.parent_id AND s.kind = 'series'
+             WHERE s.artwork ? 'poster'
+               AND w.artwork->>'poster' IS DISTINCT FROM s.artwork->>'poster'",
+        )
+        .fetch_one(&state.pool)
+        .await?
+    } else {
+        sqlx::query_scalar(
+            "WITH alvo AS (
+                 SELECT w.id AS work_id, s.artwork AS arte, s.dominant_color AS cor
+                 FROM work w
+                 JOIN collection_item ci ON ci.work_id = w.id
+                 JOIN collection temp ON temp.id = ci.collection_id AND temp.kind = 'season'
+                 JOIN collection s ON s.id = temp.parent_id AND s.kind = 'series'
+                 WHERE s.artwork ? 'poster'
+                   AND w.artwork->>'poster' IS DISTINCT FROM s.artwork->>'poster'
+             ), feito AS (
+                 UPDATE work w SET
+                     artwork = w.artwork || alvo.arte,
+                     dominant_color = COALESCE(alvo.cor, w.dominant_color),
+                     updated_at = now()
+                 FROM alvo WHERE w.id = alvo.work_id
+                 RETURNING 1
+             )
+             SELECT count(*) FROM feito",
+        )
+        .fetch_one(&state.pool)
+        .await?
+    };
+
+    let orfaos = artwork_orfao(&state).await.unwrap_or((0, 0));
+
+    Ok(Json(json!({
+        "dry_run": params.dry_run,
+        "series_pendentes": series.len(),
+        "series_enriquecidas": enriquecidas,
+        "sem_provider_key": sem_provider,
+        "provider_sem_suporte": nao_tmdb,
+        "falharam": falhou,
+        "obras_repontadas": repontadas,
+        "artwork_orfao": { "arquivos": orfaos.0, "bytes": orfaos.1 },
+        "amostra": amostra,
+    })))
+}
+
+/// Todo caminho de imagem que alguma linha do banco ainda aponta.
+///
+/// Uma consulta só, e usada nos **dois** lados da limpeza — o ensaio e a
+/// execução. Ficarem separadas era um convite a divergirem: o ensaio contaria
+/// uma coisa e a execução apagaria outra.
+///
+/// `programme.arte` entrou aqui junto com a arte da grade (§28). Sem esta
+/// linha, "limpar artwork órfão" apagaria a foto de todos os programas no ar —
+/// nenhum deles está em `work` nem em `collection`.
+const ARTWORK_VIVO: &str = "SELECT jsonb_each_text.value FROM work, jsonb_each_text(work.artwork)
+     UNION
+     SELECT jsonb_each_text.value FROM collection, jsonb_each_text(collection.artwork)
+     UNION
+     SELECT image_path FROM person WHERE image_path IS NOT NULL
+     UNION
+     SELECT arte FROM programme WHERE arte IS NOT NULL";
+
+/// Conta o artwork em disco que nenhuma linha do banco referencia mais.
+///
+/// Depois do reparo, os `{work_id}-poster.jpg` dos episódios ficam sem dono —
+/// era a cópia que aquele episódio guardava da arte da série.
+async fn artwork_orfao(state: &AppState) -> anyhow::Result<(usize, u64)> {
+    let referenciados: Vec<String> = sqlx::query_scalar(ARTWORK_VIVO)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let vivos: std::collections::HashSet<&str> =
+        referenciados.iter().map(String::as_str).collect();
+
+    let mut arquivos = 0usize;
+    let mut bytes = 0u64;
+    let mut dir = tokio::fs::read_dir(&state.config.artwork_dir).await?;
+    while let Some(entrada) = dir.next_entry().await? {
+        let nome = entrada.file_name();
+        let Some(nome) = nome.to_str() else { continue };
+        if vivos.contains(nome) {
+            continue;
+        }
+        if let Ok(meta) = entrada.metadata().await {
+            if meta.is_file() {
+                arquivos += 1;
+                bytes += meta.len();
+            }
+        }
+    }
+    Ok((arquivos, bytes))
+}
+
+/// Apaga o artwork que ninguém referencia. `dry_run` por padrão.
+pub async fn limpar_artwork_orfao(
+    State(state): State<AppState>,
+    AdminUser(_): AdminUser,
+    Query(params): Query<crate::models::RepairParams>,
+) -> AppResult<Json<Value>> {
+    let referenciados: Vec<String> = sqlx::query_scalar(ARTWORK_VIVO)
+    .fetch_all(&state.pool)
+    .await?;
+
+    let vivos: std::collections::HashSet<&str> =
+        referenciados.iter().map(String::as_str).collect();
+
+    let mut apagados = 0usize;
+    let mut bytes = 0u64;
+    let mut dir = tokio::fs::read_dir(&state.config.artwork_dir).await?;
+    while let Some(entrada) = dir.next_entry().await? {
+        let nome = entrada.file_name();
+        let Some(texto) = nome.to_str() else { continue };
+        if vivos.contains(texto) {
+            continue;
+        }
+        let Ok(meta) = entrada.metadata().await else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        apagados += 1;
+        bytes += meta.len();
+        if !params.dry_run {
+            if let Err(e) = tokio::fs::remove_file(entrada.path()).await {
+                tracing::warn!(arquivo = %texto, error = %e, "não apagou artwork órfão");
+            }
+        }
+    }
+
+    Ok(Json(json!({
+        "dry_run": params.dry_run,
+        "arquivos": apagados,
+        "bytes": bytes,
+        "gb": format!("{:.2}", bytes as f64 / 1e9),
+    })))
+}

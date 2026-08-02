@@ -6,6 +6,7 @@ mod curation;
 mod error;
 mod events;
 mod jobs;
+mod live;
 mod metadata;
 mod models;
 mod routes;
@@ -57,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("não consegui conectar no Postgres")?;
 
+    // 0012 adiciona o índice de collection_item(work_id) — ver a migração.
     sqlx::migrate!("./migrations")
         .run(&pool)
         .await
@@ -130,6 +132,15 @@ async fn main() -> anyhow::Result<()> {
              Crie o administrador em POST /api/auth/setup — até lá tudo responde 401."
         );
     }
+
+    // O vigia dos lembretes de programa ao vivo.
+    live::vigiar_lembretes(state.pool.clone(), state.events.clone());
+    // E o da grade, que reimporta antes de a programação acabar.
+    live::vigiar_grade(
+        state.pool.clone(),
+        state.providers.http.clone(),
+        state.config.artwork_dir.clone(),
+    );
 
     let app = routes::router(state.clone())
         // pôsteres e backdrops baixados dos providers

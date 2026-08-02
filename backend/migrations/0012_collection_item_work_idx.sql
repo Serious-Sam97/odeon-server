@@ -1,0 +1,28 @@
+-- Índice que faltava desde o 0001.
+--
+-- `collection_item` tem PK `(collection_id, work_id)`, o que serve pra "quais
+-- obras estão nesta coleção". Mas a pergunta que a biblioteca faz o tempo todo
+-- é a INVERSA — "de que série este episódio é?" — e essa não usa o prefixo do
+-- índice, então virava varredura sequencial.
+--
+-- Medido neste acervo (17.498 obras, 8.885 linhas em collection_item), com o
+-- LATERAL que sobe episódio → temporada → série:
+--
+--     antes:  6.557 ms
+--     depois:    119 ms      (55×)
+--
+-- Era o custo dominante de `/api/works` e de `/api/library`, que faz o mesmo
+-- salto duas vezes. Nas duas rotas, medido de ponta a ponta:
+--
+--     /api/works    6,9 s  →  1,10 s
+--     /api/library 11,4 s  →  1,30 s
+--     com filtro    4,6 s  →  0,15 s
+--
+-- Nenhuma das duas telas estava "lenta por causa do volume": estavam lentas
+-- por causa de um índice que faltava.
+--
+-- O `work_tag` já tinha o índice equivalente (`work_tag_tag_idx` é o outro
+-- lado, e a PK cobre `work_id` no prefixo). Aqui a ordem da PK deixou o caso
+-- descoberto.
+
+CREATE INDEX IF NOT EXISTS collection_item_work_idx ON collection_item (work_id);

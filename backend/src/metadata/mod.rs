@@ -700,26 +700,52 @@ pub async fn apply_candidate(
     // sempre, divergindo da temporada em que a obra realmente foi filada.
     let season_number = is_episode.then(|| guess.season.unwrap_or(1));
 
+    // --- a série vem antes da arte, porque a arte é dela ---------------------
+    //
+    // O pôster e o backdrop que o provider devolve para um episódio são os da
+    // SÉRIE — arte por episódio é o `still`, que é outro campo. Baixá-los por
+    // obra guardava a mesma imagem uma vez por episódio: 18.004 arquivos para
+    // 1.429 imagens distintas, 2,19 GB onde caberiam 197 MB, uma delas salva
+    // 553 vezes.
+    //
+    // Agora a coleção-série é dona do arquivo e o episódio aponta pra ele.
+    let serie = if is_episode {
+        Some(ensure_serie(pool, providers, artwork_dir, candidate).await?)
+    } else {
+        None
+    };
+
     // --- artwork -----------------------------------------------------------
     let mut artwork_json = serde_json::Map::new();
     let mut dominant = candidate.accent_color.clone();
 
-    if let Some(url) = &candidate.poster_url {
-        match artwork::fetch(&providers.http, artwork_dir, work.id, "poster", url).await {
-            Ok(stored) => {
-                artwork_json.insert("poster".into(), stored.path.clone().into());
-                // A cor do AniList é curada; a extraída do pôster é o fallback.
-                dominant = dominant.or(stored.dominant_color);
-            }
-            Err(e) => tracing::warn!(error = %e, "pôster não baixou"),
+    if let Some(serie) = &serie {
+        // Herdado da série: zero rede, zero disco.
+        if let Some(poster) = &serie.poster {
+            artwork_json.insert("poster".into(), poster.clone().into());
         }
-    }
-    if let Some(url) = &candidate.backdrop_url {
-        match artwork::fetch(&providers.http, artwork_dir, work.id, "backdrop", url).await {
-            Ok(stored) => {
-                artwork_json.insert("backdrop".into(), stored.path.into());
+        if let Some(backdrop) = &serie.backdrop {
+            artwork_json.insert("backdrop".into(), backdrop.clone().into());
+        }
+        dominant = dominant.or_else(|| serie.dominant_color.clone());
+    } else {
+        if let Some(url) = &candidate.poster_url {
+            match artwork::fetch(&providers.http, artwork_dir, work.id, "poster", url).await {
+                Ok(stored) => {
+                    artwork_json.insert("poster".into(), stored.path.clone().into());
+                    // A cor do AniList é curada; a extraída do pôster é o fallback.
+                    dominant = dominant.or(stored.dominant_color);
+                }
+                Err(e) => tracing::warn!(error = %e, "pôster não baixou"),
             }
-            Err(e) => tracing::warn!(error = %e, "backdrop não baixou"),
+        }
+        if let Some(url) = &candidate.backdrop_url {
+            match artwork::fetch(&providers.http, artwork_dir, work.id, "backdrop", url).await {
+                Ok(stored) => {
+                    artwork_json.insert("backdrop".into(), stored.path.into());
+                }
+                Err(e) => tracing::warn!(error = %e, "backdrop não baixou"),
+            }
         }
     }
 
@@ -730,17 +756,12 @@ pub async fn apply_candidate(
     if is_episode {
         // O título da OBRA é o do episódio; o nome da série mora na coleção.
         // É exatamente pra isso que o modelo em grafo existe.
-        let series_key = format!("{}:{}", candidate.provider, candidate.provider_id);
-        let series_id = ensure_collection(
-            pool,
-            &series_key,
-            "series",
-            &candidate.title,
-            None,
-            None,
-            candidate.year,
-        )
-        .await?;
+        //
+        // A série já foi criada e enriquecida lá em cima — ela precisa existir
+        // antes do bloco de artwork, porque é dela que a arte vem.
+        let serie = serie.as_ref().expect("episódio sempre resolve a série");
+        let series_key = serie.provider_key.clone();
+        let series_id = serie.id;
 
         let season_number = season_number.unwrap_or(1);
         let season_id = ensure_collection(
@@ -984,6 +1005,166 @@ async fn store_credits(
         .await?;
     }
 
+    Ok(())
+}
+
+/// O que a coleção-série sabe de si mesma, depois de garantida e enriquecida.
+#[derive(Debug, Clone)]
+pub struct SerieIdentificada {
+    pub id: Uuid,
+    pub provider_key: String,
+    pub poster: Option<String>,
+    pub backdrop: Option<String>,
+    pub dominant_color: Option<String>,
+}
+
+/// Garante a coleção-série **e a enriquece**: sinopse, ids do provider e arte.
+///
+/// A coleção-série nascia como um agrupamento vazio e ficava assim para sempre
+/// — o identificador enriquece obras, e a série nunca é uma obra. No acervo
+/// isso deixou `overview` nulo nas 115 séries e `external_ids` vazio nas 115.
+///
+/// A arte é o outro lado da mesma moeda: o pôster que o provider devolve para
+/// um episódio é o da série, e baixá-lo por obra guardava a mesma imagem uma
+/// vez por episódio. Aqui ela é baixada **uma vez**, com o nome da coleção, e
+/// o episódio herda o caminho.
+///
+/// A guarda de rede é precisa de propósito: só volta a buscar o que ainda
+/// falta *e* que o candidato tem como preencher. Sem ela seriam dois downloads
+/// por episódio identificado, para reescrever sempre a mesma coisa.
+async fn ensure_serie(
+    pool: &PgPool,
+    providers: &Providers,
+    artwork_dir: &Path,
+    candidate: &Candidate,
+) -> anyhow::Result<SerieIdentificada> {
+    let provider_key = format!("{}:{}", candidate.provider, candidate.provider_id);
+    let id = ensure_collection(
+        pool,
+        &provider_key,
+        "series",
+        &candidate.title,
+        None,
+        None,
+        candidate.year,
+    )
+    .await?;
+
+    let (overview, poster, backdrop, cor): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = sqlx::query_as(
+        "SELECT overview, artwork->>'poster', artwork->>'backdrop', dominant_color
+         FROM collection WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+
+    let falta_texto = overview.is_none() && candidate.overview.is_some();
+    let falta_arte = (poster.is_none() && candidate.poster_url.is_some())
+        || (backdrop.is_none() && candidate.backdrop_url.is_some());
+
+    if !falta_texto && !falta_arte {
+        return Ok(SerieIdentificada {
+            id,
+            provider_key,
+            poster,
+            backdrop,
+            dominant_color: cor,
+        });
+    }
+
+    let mut arte = SerieIdentificada {
+        id,
+        provider_key,
+        poster,
+        backdrop,
+        dominant_color: cor.or_else(|| candidate.accent_color.clone()),
+    };
+
+    if arte.poster.is_none() {
+        if let Some(url) = &candidate.poster_url {
+            match artwork::fetch(&providers.http, artwork_dir, id, "poster", url).await {
+                Ok(stored) => {
+                    arte.poster = Some(stored.path);
+                    arte.dominant_color = arte.dominant_color.or(stored.dominant_color);
+                }
+                Err(e) => tracing::warn!(error = %e, "pôster da série não baixou"),
+            }
+        }
+    }
+    if arte.backdrop.is_none() {
+        if let Some(url) = &candidate.backdrop_url {
+            match artwork::fetch(&providers.http, artwork_dir, id, "backdrop", url).await {
+                Ok(stored) => arte.backdrop = Some(stored.path),
+                Err(e) => tracing::warn!(error = %e, "backdrop da série não baixou"),
+            }
+        }
+    }
+
+    grava_identidade_da_serie(
+        pool,
+        id,
+        candidate.overview.as_deref(),
+        &candidate.provider,
+        &candidate.provider_id,
+        arte.poster.as_deref(),
+        arte.backdrop.as_deref(),
+        arte.dominant_color.as_deref(),
+    )
+    .await?;
+
+    Ok(arte)
+}
+
+/// O UPDATE em si, isolado porque o reparo das séries já existentes precisa do
+/// mesmo comportamento sem passar pelo caminho de identificação de uma obra.
+///
+/// Nenhuma coluna é apagada: o provider preenche o que está faltando e não
+/// derruba o que já está lá.
+#[allow(clippy::too_many_arguments)]
+pub async fn grava_identidade_da_serie(
+    pool: &PgPool,
+    collection_id: Uuid,
+    overview: Option<&str>,
+    provider: &str,
+    provider_id: &str,
+    poster: Option<&str>,
+    backdrop: Option<&str>,
+    dominant_color: Option<&str>,
+) -> anyhow::Result<()> {
+    let mut arte = serde_json::Map::new();
+    if let Some(p) = poster {
+        arte.insert("poster".into(), p.into());
+    }
+    if let Some(b) = backdrop {
+        arte.insert("backdrop".into(), b.into());
+    }
+
+    let mut ids = serde_json::Map::new();
+    ids.insert(
+        provider.to_string(),
+        serde_json::Value::String(provider_id.to_string()),
+    );
+
+    sqlx::query(
+        "UPDATE collection SET
+            overview       = COALESCE(overview, $2),
+            external_ids   = collection.external_ids || $3,
+            artwork        = collection.artwork || $4,
+            dominant_color = COALESCE(dominant_color, $5)
+         WHERE id = $1",
+    )
+    .bind(collection_id)
+    .bind(overview)
+    .bind(serde_json::Value::Object(ids))
+    .bind(serde_json::Value::Object(arte))
+    .bind(dominant_color)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 

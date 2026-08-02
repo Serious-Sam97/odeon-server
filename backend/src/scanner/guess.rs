@@ -280,7 +280,44 @@ pub fn guess_from_path(path: &Path, root: &Path, serial: bool) -> Guess {
     guess
 }
 
+/// Desfaz as trocas que o sistema de arquivos obrigou.
+///
+/// Nenhum sistema de arquivos aceita `/ \ : * ? " < >` num nome, e todo
+/// downloader resolve isso do mesmo jeito: troca por um sósia Unicode que
+/// *parece* o caractere e não é. O nome sobrevive no disco, e o título chega
+/// aqui escrito errado — `Happy Tree Friends： Still Alive`,
+/// `Snow What？ That's What`, `AC⧸DC`.
+///
+/// Medido neste acervo: **1.542 obras** com pelo menos um deles, quase 9% da
+/// biblioteca. O `：` sozinho aparece em 1.246 — é o dois-pontos de subtítulo,
+/// que quase toda série tem.
+///
+/// Desfazer é seguro aqui porque a entrada é, por definição, um nome de
+/// arquivo ou de pasta: se o sósia está no nome, foi o downloader que o pôs.
+pub fn restaura_o_que_o_disco_proibiu(nome: &str) -> String {
+    if !nome.contains(|c| matches!(c, '⧸' | '／' | '⧵' | '＼' | '：' | '＊' | '？' | '＂' | '＜' | '＞' | '｜'))
+    {
+        return nome.to_string();
+    }
+    nome.chars()
+        .map(|c| match c {
+            '⧸' | '／' => '/',
+            '⧵' | '＼' => '\\',
+            '：' => ':',
+            '＊' => '*',
+            '？' => '?',
+            '＂' => '"',
+            '＜' => '<',
+            '＞' => '>',
+            '｜' => '|',
+            outro => outro,
+        })
+        .collect()
+}
+
 fn guess_with_hint(filename: &str, anime_hint: bool, serial: bool) -> Guess {
+    let filename = restaura_o_que_o_disco_proibiu(filename);
+    let filename = filename.as_str();
     let stem = filename
         .rsplit_once('.')
         .map(|(s, _)| s)
@@ -465,6 +502,23 @@ mod tests {
     /// sem sinal de anime só valem em biblioteca de episódios.
     const SERIES: bool = true;
     const FILMES: bool = false;
+
+    /// 1.542 obras deste acervo têm pelo menos um sósia no título.
+    #[test]
+    fn sosia_de_caractere_proibido_volta_a_ser_o_caractere() {
+        assert_eq!(
+            g("Happy Tree Friends： Still Alive - Just be Claus.mkv").title,
+            "Happy Tree Friends: Still Alive - Just be Claus"
+        );
+        assert_eq!(g("Snow What？ That's What.mp4").title, "Snow What? That's What");
+        assert_eq!(g("S06 - Q&A w⧸Raphael Bob-Waksberg.mkv").title, "S06 - Q&A w/Raphael Bob-Waksberg");
+    }
+
+    /// Título sem sósia nenhum não paga nada: a função sai na primeira linha.
+    #[test]
+    fn titulo_limpo_nao_e_tocado_pela_restauracao() {
+        assert_eq!(restaura_o_que_o_disco_proibiu("Blade Runner 2049"), "Blade Runner 2049");
+    }
 
     #[test]
     fn scene_release_de_filme() {

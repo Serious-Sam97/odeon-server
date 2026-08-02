@@ -21,8 +21,47 @@ use crate::AppState;
 const COLLECTION_COLUMNS: &str = r#"
     c.id, c.kind, c.parent_id, c.title, c.year, c.overview, c.description,
     c.position, c.origin, c.provider_key,
-    (SELECT count(*) FROM collection_item ci WHERE ci.collection_id = c.id) AS item_count
+    COALESCE(agg.item_count, 0) AS item_count, agg.posters
 "#;
+
+/// Contagem e capas da **subárvore**, não dos filhos diretos.
+///
+/// Antes era `count(*) WHERE collection_id = c.id`, o que dá zero para toda
+/// série: episódio pertence à temporada, não à série. A tela mostrava
+/// "SÉRIE · 0" em cima de 70 episódios.
+///
+/// `DISTINCT` porque nada impede a mesma obra de estar numa temporada e numa
+/// ordem de exibição dentro da mesma franquia — contá-la duas vezes seria
+/// inventar acervo.
+///
+/// **Um rollup para todas as coleções, não uma CTE por linha.**
+///
+/// A primeira versão era um `LATERAL` com `WITH RECURSIVE` correlacionado em
+/// `c.id` — correto, e 4,9 s na árvore, porque roda 576 vezes. Aqui a recursão
+/// acontece uma vez só: `descendencia` casa cada coleção com toda a sua
+/// subárvore (raiz inclusa), e o `GROUP BY` agrega em cima disso.
+const COLLECTION_WITH: &str = r#"
+WITH RECURSIVE descendencia AS (
+    SELECT id AS raiz, id AS no FROM collection
+    UNION ALL
+    SELECT d.raiz, filho.id
+    FROM descendencia d JOIN collection filho ON filho.parent_id = d.no
+),
+agg AS (
+    SELECT d.raiz,
+           count(DISTINCT ci.work_id) AS item_count,
+           (array_agg(w.artwork->>'poster')
+               FILTER (WHERE w.artwork ? 'poster'))[1:4] AS posters
+    FROM descendencia d
+    JOIN collection_item ci ON ci.collection_id = d.no
+    JOIN work w ON w.id = ci.work_id
+    GROUP BY d.raiz
+)
+"#;
+
+/// `COALESCE` porque coleção vazia não aparece no `agg` — e `NULL` viraria erro
+/// de decode no `i64` do `item_count`.
+const COLLECTION_JOIN: &str = "LEFT JOIN agg ON agg.raiz = c.id";
 
 // ------------------------------------------------------------------- tags
 
@@ -130,8 +169,10 @@ pub async fn list_collections(
     Query(filter): Query<CollectionFilter>,
 ) -> AppResult<Json<Vec<CollectionRow>>> {
     let rows = sqlx::query_as::<_, CollectionRow>(&format!(
-        "SELECT {COLLECTION_COLUMNS}
+        "{COLLECTION_WITH}
+         SELECT {COLLECTION_COLUMNS}
          FROM collection c
+         {COLLECTION_JOIN}
          WHERE ($1::text IS NULL OR c.kind = $1)
            AND (NOT $2 OR c.parent_id IS NULL)
          ORDER BY c.kind, c.position NULLS LAST, c.title"
@@ -146,7 +187,7 @@ pub async fn list_collections(
 /// A árvore inteira. Franquia → série → temporada, quantos níveis houver.
 pub async fn collection_tree(State(state): State<AppState>) -> AppResult<Json<Vec<CollectionNode>>> {
     let all = sqlx::query_as::<_, CollectionRow>(&format!(
-        "SELECT {COLLECTION_COLUMNS} FROM collection c
+        "{COLLECTION_WITH} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN}
          ORDER BY c.position NULLS LAST, c.title"
     ))
     .fetch_all(&state.pool)
@@ -194,7 +235,7 @@ pub async fn collection_detail(
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Value>> {
     let collection = sqlx::query_as::<_, CollectionRow>(&format!(
-        "SELECT {COLLECTION_COLUMNS} FROM collection c WHERE c.id = $1"
+        "{COLLECTION_WITH} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN} WHERE c.id = $1"
     ))
     .bind(id)
     .fetch_optional(&state.pool)
@@ -202,7 +243,7 @@ pub async fn collection_detail(
     .ok_or(AppError::NotFound)?;
 
     let children = sqlx::query_as::<_, CollectionRow>(&format!(
-        "SELECT {COLLECTION_COLUMNS} FROM collection c
+        "{COLLECTION_WITH} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN}
          WHERE c.parent_id = $1 ORDER BY c.position NULLS LAST, c.title"
     ))
     .bind(id)
@@ -216,6 +257,8 @@ pub async fn collection_detail(
             w.id, w.kind, w.title, w.year, w.season_number, w.episode_number,
             w.match_state, w.match_confidence, w.dominant_color,
             w.artwork->>'poster' AS poster,
+            w.artwork->>'backdrop' AS backdrop,
+            w.artwork->>'still' AS still,
             NULL::text AS series_title,
             f.id AS media_file_id, f.duration_seconds, f.width, f.height,
             f.video_codec, f.audio_codec, f.container, f.size_bytes,
@@ -390,7 +433,7 @@ pub async fn reorder(
 
 async fn fetch_collection(state: &AppState, id: Uuid) -> AppResult<CollectionRow> {
     sqlx::query_as::<_, CollectionRow>(&format!(
-        "SELECT {COLLECTION_COLUMNS} FROM collection c WHERE c.id = $1"
+        "{COLLECTION_WITH} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN} WHERE c.id = $1"
     ))
     .bind(id)
     .fetch_optional(&state.pool)
@@ -400,8 +443,11 @@ async fn fetch_collection(state: &AppState, id: Uuid) -> AppResult<CollectionRow
 
 pub async fn collections_of(state: &AppState, work_id: Uuid) -> AppResult<Vec<CollectionRow>> {
     let rows = sqlx::query_as::<_, CollectionRow>(&format!(
-        "SELECT {COLLECTION_COLUMNS}
-         FROM collection_item ci JOIN collection c ON c.id = ci.collection_id
+        "{COLLECTION_WITH}
+         SELECT {COLLECTION_COLUMNS}
+         FROM collection_item ci
+         JOIN collection c ON c.id = ci.collection_id
+         {COLLECTION_JOIN}
          WHERE ci.work_id = $1
          ORDER BY c.kind, c.title"
     ))

@@ -125,6 +125,8 @@ pub async fn detail(
             w.id, w.kind, w.title, w.year, w.season_number, w.episode_number,
             w.match_state, w.match_confidence, w.dominant_color,
             w.artwork->>'poster' AS poster,
+            w.artwork->>'backdrop' AS backdrop,
+            w.artwork->>'still' AS still,
             NULL::text AS series_title,
             f.id AS media_file_id, f.duration_seconds, f.width, f.height,
             f.video_codec, f.audio_codec, f.container, f.size_bytes,

@@ -1,4 +1,10 @@
-//! Legendas embutidas: listar, extrair pra WebVTT, ou queimar.
+//! Legendas: listar, extrair pra WebVTT, ou queimar.
+//!
+//! **Duas origens.** Embutidas no container, e em arquivo ao lado (`.srt`,
+//! `.ass`). O Odeon só lia as embutidas, e isso deixava a maioria dos filmes
+//! sem legenda nenhuma: medido neste acervo, **348 de 400 filmes sem faixa
+//! embutida têm arquivo de legenda na pasta** — 4.136 arquivos no total. Era a
+//! diferença entre "o Jellyfin mostra e o Odeon não".
 //!
 //! Duas famílias, com destinos diferentes:
 //!
@@ -36,6 +42,80 @@ pub struct SubtitleTrack {
     /// Rótulo pronto pro seletor. Vem do servidor pra os quatro clientes não
     /// reimplementarem a mesma regra cada um do seu jeito.
     pub label: String,
+    /// `embutida` ou `arquivo`. A interface mostra a diferença porque ela
+    /// importa: faixa em arquivo não pode ser queimada pelo caminho de hoje.
+    pub origem: &'static str,
+}
+
+/// Extensões que valem como legenda em arquivo.
+const EXTENSOES: &[&str] = &["srt", "ass", "ssa", "vtt", "sub"];
+
+/// Índice das externas: **negativo**, começando em -1.
+///
+/// Espaço separado de propósito. O índice positivo é `0:s:N`, o que o ffmpeg
+/// espera pra faixa embutida; misturar os dois faria uma externa de índice 2
+/// virar a terceira faixa embutida na hora de extrair. Negativo não colide com
+/// nada que o ffmpeg produza.
+pub fn indice_externo(ordem: usize) -> i32 {
+    -(ordem as i32 + 1)
+}
+
+pub fn e_externo(index: i32) -> bool {
+    index < 0
+}
+
+/// Adivinha idioma e "forçada" pelo nome do arquivo.
+///
+/// Os dois padrões que aparecem no acervo real:
+///
+///   `Filme.2019.1080p...pt-BR.srt`          → sufixo depois do nome do vídeo
+///   `Subs/Brazilian (Forced).por.srt`       → nome próprio dentro de `Subs/`
+///
+/// Devolve `(idioma, forcada, rotulo)`. Idioma fica `None` quando o nome não
+/// diz — inventar "inglês" porque a maioria é inglês seria mentir com cara de
+/// metadado.
+pub fn descreve_arquivo(nome_arquivo: &str, stem_do_video: &str) -> (Option<String>, bool, String) {
+    let sem_ext = nome_arquivo.rsplit_once('.').map(|(a, _)| a).unwrap_or(nome_arquivo);
+
+    // Tira o nome do vídeo da frente, quando o arquivo é irmão dele.
+    let resto = sem_ext
+        .strip_prefix(stem_do_video)
+        .map(|r| r.trim_start_matches(['.', '-', '_', ' ']))
+        .unwrap_or(sem_ext);
+
+    let minusculo = resto.to_lowercase();
+    let forcada = minusculo.contains("forced") || minusculo.contains("forçad");
+
+    // O idioma é o último pedaço separado por ponto, quando parece código.
+    let idioma = resto
+        .rsplit('.')
+        .next()
+        .map(str::trim)
+        .filter(|p| {
+            let n = p.chars().count();
+            (2..=5).contains(&n) && p.chars().all(|c| c.is_ascii_alphabetic() || c == '-')
+        })
+        .map(|p| p.to_string());
+
+    // O rótulo é o que sobra sem o código de idioma — e quando não sobra nada,
+    // o próprio idioma serve.
+    let sem_idioma = match &idioma {
+        Some(i) => resto.trim_end_matches(i).trim_end_matches('.').trim().to_string(),
+        None => resto.trim().to_string(),
+    };
+    let base = if sem_idioma.is_empty() {
+        idioma.clone().unwrap_or_else(|| "Legenda".into())
+    } else {
+        sem_idioma
+    };
+
+    let rotulo = if forcada && !base.to_lowercase().contains("forc") {
+        format!("{base} (forçada)")
+    } else {
+        base
+    };
+
+    (idioma, forcada, rotulo)
 }
 
 fn label_for(title: &Option<String>, language: &Option<String>, index: i32, forced: bool) -> String {
@@ -101,6 +181,7 @@ pub fn from_probe(probe: &serde_json::Value) -> Vec<SubtitleTrack> {
             let forced = flag("forced");
 
             SubtitleTrack {
+                origem: "embutida",
                 index: index as i32,
                 text_based: is_text_based(&codec),
                 styled: is_styled(&codec),
@@ -116,6 +197,106 @@ pub fn from_probe(probe: &serde_json::Value) -> Vec<SubtitleTrack> {
 }
 
 /// Extrai uma faixa de texto pra WebVTT. Rápido: não decodifica vídeo.
+/// Procura legendas em arquivo ao lado do vídeo.
+///
+/// Dois lugares, que é onde elas realmente estão: **na mesma pasta**, com nome
+/// começando pelo do vídeo (padrão YTS), e numa subpasta **`Subs/`**, onde o
+/// nome é do idioma e não do filme.
+///
+/// Feito na hora do pedido e não no scan de propósito: jogar um `.srt` na pasta
+/// passa a valer na hora, sem revarrer 17 mil arquivos.
+pub async fn externas(video: &Path) -> Vec<(std::path::PathBuf, SubtitleTrack)> {
+    let Some(dir) = video.parent() else { return Vec::new() };
+    let stem = video.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+
+    let mut achadas: Vec<(std::path::PathBuf, String)> = Vec::new();
+
+    // 1) irmãs, com o nome do vídeo na frente
+    if let Ok(mut rd) = tokio::fs::read_dir(dir).await {
+        while let Ok(Some(e)) = rd.next_entry().await {
+            let caminho = e.path();
+            let Some(nome) = caminho.file_name().and_then(|n| n.to_str()) else { continue };
+            let ext = caminho
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.to_lowercase())
+                .unwrap_or_default();
+            if EXTENSOES.contains(&ext.as_str()) && nome.starts_with(stem) {
+                achadas.push((caminho.clone(), nome.to_string()));
+            }
+        }
+    }
+
+    // 2) a subpasta Subs/
+    for pasta in ["Subs", "subs", "Subtitles", "legendas"] {
+        let sub = dir.join(pasta);
+        if let Ok(mut rd) = tokio::fs::read_dir(&sub).await {
+            while let Ok(Some(e)) = rd.next_entry().await {
+                let caminho = e.path();
+                let Some(nome) = caminho.file_name().and_then(|n| n.to_str()) else { continue };
+                let ext = caminho
+                    .extension()
+                    .and_then(|x| x.to_str())
+                    .map(|x| x.to_lowercase())
+                    .unwrap_or_default();
+                if EXTENSOES.contains(&ext.as_str()) {
+                    achadas.push((caminho.clone(), nome.to_string()));
+                }
+            }
+        }
+    }
+
+    // Ordem estável: `read_dir` não garante nenhuma, e índice que muda entre
+    // dois pedidos faria o player pedir a faixa errada.
+    achadas.sort_by(|a, b| a.1.cmp(&b.1));
+
+    achadas
+        .into_iter()
+        .enumerate()
+        .map(|(i, (caminho, nome))| {
+            let codec = caminho
+                .extension()
+                .and_then(|x| x.to_str())
+                .unwrap_or("srt")
+                .to_lowercase();
+            let (idioma, forcada, rotulo) = descreve_arquivo(&nome, stem);
+            let track = SubtitleTrack {
+                origem: "arquivo",
+                index: indice_externo(i),
+                text_based: is_text_based(&codec),
+                styled: is_styled(&codec),
+                label: rotulo,
+                language: idioma,
+                title: None,
+                forced: forcada,
+                default: false,
+                codec,
+            };
+            (caminho, track)
+        })
+        .collect()
+}
+
+/// Converte uma legenda em arquivo pra WebVTT.
+pub async fn arquivo_para_webvtt(caminho: &Path) -> anyhow::Result<String> {
+    let output = Command::new("ffmpeg")
+        .args(["-hide_banner", "-loglevel", "error", "-i"])
+        .arg(caminho)
+        .args(["-f", "webvtt", "-"])
+        .output()
+        .await
+        .context("falha ao executar ffmpeg")?;
+
+    if !output.status.success() {
+        anyhow::bail!(
+            "conversão de {} falhou: {}",
+            caminho.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 pub async fn extract_webvtt(source: &Path, index: i32) -> anyhow::Result<String> {
     let output = Command::new("ffmpeg")
         .args(["-hide_banner", "-loglevel", "error", "-i"])
@@ -147,6 +328,43 @@ pub async fn extract_webvtt(source: &Path, index: i32) -> anyhow::Result<String>
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn le_idioma_do_sufixo_yts() {
+        let (idioma, forcada, rotulo) = descreve_arquivo(
+            "1917.2019.1080p.BluRay.x264.AAC5.1-[YTS.MX].pt-BR.srt",
+            "1917.2019.1080p.BluRay.x264.AAC5.1-[YTS.MX]",
+        );
+        assert_eq!(idioma.as_deref(), Some("pt-BR"));
+        assert!(!forcada);
+        assert_eq!(rotulo, "pt-BR");
+    }
+
+    #[test]
+    fn le_nome_dentro_de_subs() {
+        let (idioma, forcada, rotulo) =
+            descreve_arquivo("Brazilian (Forced).por.srt", "28.Years.Later.2026.1080p");
+        assert_eq!(idioma.as_deref(), Some("por"));
+        assert!(forcada);
+        assert_eq!(rotulo, "Brazilian (Forced)");
+    }
+
+    #[test]
+    fn sem_sufixo_de_idioma_nao_inventa() {
+        // Inventar "eng" porque a maioria é inglês seria mentir com cara de
+        // metadado.
+        let (idioma, _, rotulo) = descreve_arquivo("Filme.2019.srt", "Filme.2019");
+        assert_eq!(idioma, None);
+        assert_eq!(rotulo, "Legenda");
+    }
+
+    #[test]
+    fn indices_externos_nao_colidem_com_embutidos() {
+        assert_eq!(indice_externo(0), -1);
+        assert_eq!(indice_externo(2), -3);
+        assert!(e_externo(-1));
+        assert!(!e_externo(0));
+    }
 
     fn probe() -> serde_json::Value {
         json!({

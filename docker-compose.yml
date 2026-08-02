@@ -67,11 +67,23 @@ services:
       # Os discos de mídia NÃO levam `z`: são exFAT, que não guarda xattr, então
       # não há rótulo por arquivo pra aplicar — o relabel falharia. O rótulo
       # deles vem do mount (`context=` no /etc/fstab). Ver README desta máquina.
-      - ${MEDIA_PATH}:/media:ro
+      # LEITURA E ESCRITA desde a R10, e a troca é consciente.
+      #
+      # Eram `:ro`, e o `:ro` era uma garantia real: nenhum bug e nenhuma sessão
+      # de admin vazada alcançava a mídia. Trocar por escrita foi decisão de
+      # quem administra este servidor, pra que "apagar do disco" na gaveta de
+      # gerenciar exista de verdade em vez de existir desabilitado.
+      #
+      # O que segura o risco agora é código, não montagem: só admin apaga, a
+      # confirmação é por digitação com a lista de arquivos na frente, e o
+      # `GET /api/storage` testa escrita de verdade em vez de deduzir. Voltar
+      # pra `:ro` é acrescentar `:ro` de novo aqui e `docker compose up -d` —
+      # o botão volta a nascer desabilitado, explicando o porquê.
+      - ${MEDIA_PATH}:/media
       # Discos extras, opcionais. Apontam pra si mesmos quando não usados —
       # o servidor descarta raiz que não existe ou está vazia.
-      - ${MEDIA_PATH_2:-${MEDIA_PATH}}:/media2:ro
-      - ${MEDIA_PATH_3:-${MEDIA_PATH}}:/media3:ro
+      - ${MEDIA_PATH_2:-${MEDIA_PATH}}:/media2
+      - ${MEDIA_PATH_3:-${MEDIA_PATH}}:/media3
       # Onde ficam cert.crt/cert.key. Read-only: o servidor só lê.
       - ./certs:/certs:ro,z
       - cache:/cache

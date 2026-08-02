@@ -67,6 +67,13 @@ pub struct WorkListItem {
     pub dominant_color: Option<String>,
     /// Caminho relativo servido em `/artwork/...`; None enquanto não identificado.
     pub poster: Option<String>,
+    /// Arte larga da obra. Baixada desde o M1 junto com o pôster, mas só passou
+    /// a sair daqui no redesenho: o herói do painel precisa de 16:9, e recortar
+    /// um pôster 2:3 pra isso dá enquadramento ruim em toda obra.
+    pub backdrop: Option<String>,
+    /// Quadro do episódio, quando o provider tem. Melhor que o backdrop da
+    /// série no painel — é a cena daquele episódio, não da série inteira.
+    pub still: Option<String>,
     /// Nome da série, quando a obra é um episódio dentro de uma coleção.
     pub series_title: Option<String>,
     pub media_file_id: Option<Uuid>,
@@ -453,7 +460,13 @@ pub struct CollectionRow {
     pub position: Option<i32>,
     pub origin: String,
     pub provider_key: Option<String>,
+    /// Obras na **subárvore inteira**, não só filhos diretos.
+    ///
+    /// Contava só o nível de baixo, e como episódio mora na temporada, toda
+    /// série aparecia como "0" na tela — com 70 episódios embaixo.
     pub item_count: i64,
+    /// Até quatro pôsteres da subárvore, pra capa empilhada do cartão.
+    pub posters: Option<Vec<String>>,
 }
 
 /// Coleção com filhos — o grafo recursivo materializado pra UI.

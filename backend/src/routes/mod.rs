@@ -2,6 +2,7 @@ pub mod auth;
 pub mod browse;
 pub mod curation;
 pub mod graph;
+pub mod live;
 pub mod metadata;
 pub mod people;
 pub mod playback;
@@ -39,7 +40,11 @@ pub fn router(state: AppState) -> Router {
             "/api/auth/users",
             get(auth::list_users).post(auth::create_user),
         )
-        .route("/api/auth/users/{id}", delete(auth::delete_user))
+        .route(
+            "/api/auth/users/{id}",
+            delete(auth::delete_user).patch(auth::update_user),
+        )
+        .route("/api/auth/sessions/{id}", delete(auth::revoke_one))
         .route("/api/libraries", get(list_libraries).post(create_library))
         .route("/api/libraries/{id}", delete(delete_library).patch(update_library))
         .route("/api/browse", get(browse::browse))
@@ -49,7 +54,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/jobs", get(list_jobs))
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/works", get(works::list))
-        .route("/api/works/{id}", get(works::detail))
+        // A biblioteca agrupada: série vira UMA entrada. Rota separada de
+        // `/api/works` de propósito — dentro de uma coleção o que se quer é a
+        // lista plana de episódios, e é `/api/works` que responde isso.
+        .route("/api/library", get(works::library))
+        .route("/api/works/{id}", get(works::detail).delete(works::delete_work))
         .route("/api/works/{id}/progress", post(works::progress))
         .route("/api/continue", get(works::continue_watching))
         .route("/api/stream/{media_file_id}", get(stream::stream))
@@ -64,6 +73,14 @@ pub fn router(state: AppState) -> Router {
             "/api/maintenance/repair-episode-titles",
             post(metadata::repair_episode_titles),
         )
+        .route(
+            "/api/maintenance/repair-series",
+            post(metadata::repair_series),
+        )
+        .route(
+            "/api/maintenance/artwork-orfao",
+            post(metadata::limpar_artwork_orfao),
+        )
         // A pasta como unidade de decisão — ver o módulo `scopes`.
         .route("/api/review/scopes", get(scopes::list))
         .route("/api/scopes/search", post(scopes::search))
@@ -76,6 +93,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/works/bulk/match", post(metadata::bulk_match))
         .route("/api/works/bulk/state", post(metadata::bulk_state))
         .route("/api/works/{id}/reset", post(metadata::reset))
+        .route("/api/works/{id}/ignore", post(works::ignore_work))
+        .route("/api/storage", get(works::storage))
+        .route("/api/diagnostico", get(works::diagnostico))
         // Correção humana do parse, persistida — ver o handler.
         .route(
             "/api/works/{id}/parse",
@@ -125,6 +145,7 @@ pub fn router(state: AppState) -> Router {
         // --- M5: curadoria ---
         .route("/api/curation/for-you", get(curation::for_you))
         .route("/api/curation/taste", get(curation::taste))
+        .route("/api/curation/calibrar", get(curation::calibrar))
         .route("/api/curation/rebuild", post(curation::rebuild))
         .route("/api/curation/rebuild/status", get(curation::rebuild_status))
         .route("/api/works/{id}/similar", get(curation::similar))
@@ -138,6 +159,19 @@ pub fn router(state: AppState) -> Router {
         .route("/api/hls/{session_id}/{filename}", get(playback::hls_file))
         .route("/api/hls/{session_id}", delete(playback::stop_session))
         .route("/api/transcode/capabilities", get(playback::capabilities))
+        // --- R6: canais ao vivo ---
+        .route("/api/live/channels", get(live::channels))
+        .route("/api/live/guide", get(live::guide))
+        .route("/api/live/odeon", get(live::odeon_guide))
+        .route("/api/live/sources", get(live::sources).post(live::create_source))
+        .route("/api/live/sources/{id}", delete(live::delete_source))
+        .route("/api/live/import", post(live::import))
+        .route("/api/live/{id}/watch", post(live::watch))
+        .route("/api/live/reminders", get(live::reminders))
+        .route(
+            "/api/live/reminders/{programme_id}",
+            post(live::create_reminder).delete(live::delete_reminder),
+        )
         .route("/api/transcode/sessions", get(playback::sessions))
         .route("/api/media/{media_file_id}/subtitles", get(playback::list_subtitles))
         .route(
@@ -220,7 +254,6 @@ async fn create_library(
             .fetch_all(&state.pool)
             .await?;
 
-    let chosen = path.to_string_lossy().to_string();
     for (_, name, root) in &existing {
         let other = std::path::Path::new(root);
         if path.starts_with(other) {
@@ -236,7 +269,6 @@ async fn create_library(
             )));
         }
     }
-    let _ = chosen;
 
     let library = sqlx::query_as::<_, Library>(
         "INSERT INTO library (name, root_path, default_kind, provider_hint)
@@ -368,7 +400,12 @@ async fn delete_library(
         .execute(&mut *tx)
         .await?;
 
+    // Desfaz na mão em vez de contar com o `Drop`. O `Drop` do sqlx também
+    // desfaz, mas só quando a transação é destruída, e sem `await` — ele agenda
+    // o rollback no pool. Fechar aqui devolve a conexão imediatamente e deixa a
+    // intenção escrita: biblioteca inexistente não mexe em nada.
     if result.rows_affected() == 0 {
+        tx.rollback().await?;
         return Err(crate::error::AppError::NotFound);
     }
 

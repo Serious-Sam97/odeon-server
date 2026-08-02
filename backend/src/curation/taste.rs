@@ -176,10 +176,20 @@ pub async fn build(pool: &PgPool, user_id: Uuid) -> anyhow::Result<TasteProfile>
     // --- afinidade por tag ------------------------------------------------
     // Cada obra empresta seu peso pras tags que carrega; a normalização por
     // frequência evita que "genre:drama" (que está em tudo) vença sempre.
+    // Só as obras que ESTE usuário tocou.
+    //
+    // A consulta trazia `work_tag ⋈ tag` inteiro — 13.728 linhas neste acervo —
+    // e o filtro acontecia em Rust, contra um conjunto que pode ter 3 entradas.
+    // O custo escalava com o tamanho da BIBLIOTECA em vez de com o histórico da
+    // pessoa, e isso a cada `/for-you` e cada `/taste`.
+    let tocadas: Vec<Uuid> = work_weights.keys().copied().collect();
+
     let tag_rows: Vec<(Uuid, String)> = sqlx::query_as(
         "SELECT wt.work_id, t.namespace || ':' || t.value
-         FROM work_tag wt JOIN tag t ON t.id = wt.tag_id",
+         FROM work_tag wt JOIN tag t ON t.id = wt.tag_id
+         WHERE wt.work_id = ANY($1)",
     )
+    .bind(&tocadas)
     .fetch_all(pool)
     .await?;
 
@@ -204,11 +214,15 @@ pub async fn build(pool: &PgPool, user_id: Uuid) -> anyhow::Result<TasteProfile>
     // Mesma lógica das tags: cada obra empresta seu peso a quem trabalhou nela.
     // Só papéis de destaque — o compositor de um filme que você largou não diz
     // nada sobre você.
+    // Mesmo caso: eram 61.919 linhas de crédito trazidas pra casar com o
+    // punhado de obras que a pessoa assistiu.
     let credit_rows: Vec<(Uuid, Uuid, String, String)> = sqlx::query_as(
         "SELECT c.work_id, p.id, p.name, c.role
          FROM credit c JOIN person p ON p.id = c.person_id
-         JOIN credit_role r ON r.role = c.role AND r.featured",
+         JOIN credit_role r ON r.role = c.role AND r.featured
+         WHERE c.work_id = ANY($1)",
     )
+    .bind(&tocadas)
     .fetch_all(pool)
     .await?;
 

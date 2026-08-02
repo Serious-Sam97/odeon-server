@@ -232,8 +232,10 @@ pub async fn sessions(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
 ) -> AppResult<Json<Vec<SessionRow>>> {
+    // O `id` é o que permite encerrar UM aparelho. Sem ele, a única saída era
+    // revogar tudo — inclusive a sessão de quem estava olhando a lista.
     let rows = sqlx::query_as::<_, SessionRow>(
-        "SELECT device_label, user_agent, created_at, last_seen_at, expires_at
+        "SELECT id, device_label, user_agent, created_at, last_seen_at, expires_at
          FROM auth_session WHERE user_id = $1 ORDER BY last_seen_at DESC",
     )
     .bind(user.id)
@@ -343,5 +345,87 @@ pub async fn delete_user(
         .bind(user_id)
         .execute(&state.pool)
         .await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+/// Encerra UM aparelho.
+///
+/// O `revoke_all` já existia, mas ele derruba também quem está olhando a
+/// lista — serve para "perdi o notebook", não para arrumar a casa. Aqui a
+/// sessão é escolhida a dedo, e só entre as do próprio usuário: o `WHERE`
+/// carrega o `user_id`, então nem um admin encerra a sessão de outra pessoa
+/// por esta porta.
+pub async fn revoke_one(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+    Path(session_id): Path<Uuid>,
+) -> AppResult<Json<Value>> {
+    let r = sqlx::query("DELETE FROM auth_session WHERE id = $1 AND user_id = $2")
+        .bind(session_id)
+        .bind(user.id)
+        .execute(&state.pool)
+        .await?;
+    if r.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MudaUsuario {
+    pub role: Option<String>,
+    pub is_active: Option<bool>,
+}
+
+/// Muda papel e estado de um usuário.
+///
+/// As mesmas duas travas do `delete_user`, pelas mesmas razões: ninguém se
+/// rebaixa nem se desativa sozinho (é um beco sem saída), e o servidor não
+/// pode ficar sem nenhum administrador ativo — desse estado não se sai sem
+/// mexer no banco à mão.
+pub async fn update_user(
+    State(state): State<AppState>,
+    AdminUser(admin): AdminUser,
+    Path(user_id): Path<Uuid>,
+    Json(body): Json<MudaUsuario>,
+) -> AppResult<Json<Value>> {
+    if let Some(r) = &body.role {
+        if !matches!(r.as_str(), "admin" | "user") {
+            return Err(AppError::BadRequest("papel deve ser admin ou user".into()));
+        }
+    }
+    if user_id == admin.id && (body.role.as_deref() == Some("user") || body.is_active == Some(false))
+    {
+        return Err(AppError::BadRequest(
+            "não dá pra tirar o próprio acesso".into(),
+        ));
+    }
+
+    let sobram: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM app_user WHERE role = 'admin' AND is_active AND id <> $1",
+    )
+    .bind(user_id)
+    .fetch_one(&state.pool)
+    .await?;
+    let deixaria_de_ser_admin =
+        body.role.as_deref() == Some("user") || body.is_active == Some(false);
+    if sobram == 0 && deixaria_de_ser_admin {
+        return Err(AppError::BadRequest(
+            "isso deixaria o servidor sem administrador".into(),
+        ));
+    }
+
+    let r = sqlx::query(
+        "UPDATE app_user SET role = COALESCE($2, role), is_active = COALESCE($3, is_active)
+         WHERE id = $1",
+    )
+    .bind(user_id)
+    .bind(&body.role)
+    .bind(body.is_active)
+    .execute(&state.pool)
+    .await?;
+    if r.rows_affected() == 0 {
+        return Err(AppError::NotFound);
+    }
     Ok(Json(json!({ "ok": true })))
 }

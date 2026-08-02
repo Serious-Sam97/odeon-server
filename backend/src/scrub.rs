@@ -194,14 +194,48 @@ async fn generate_one(pool: &PgPool, scrub_dir: &Path, file: &Pending) -> anyhow
         "fps=1/{interval:.4},scale={THUMB_WIDTH}:{thumb_height},tile={COLUMNS}x{rows}"
     );
 
-    let output = Command::new("ffmpeg")
-        .args(["-v", "error", "-y", "-i"])
-        .arg(&file.path)
-        .args(["-vf", &filter, "-frames:v", "1", "-q:v", "6", "-an"])
-        .arg(&destination)
-        .output()
-        .await
-        .context("falha ao executar ffmpeg")?;
+    // `-skip_frame nokey`: decodifica só os quadros-chave.
+    //
+    // O custo desta operação era proporcional à DURAÇÃO do acervo, não à
+    // quantidade de arquivos: o filtro `fps` obriga o decode do arquivo inteiro
+    // pra amostrar 120 quadros. Medido nesta máquina, num 1080p de 20 minutos:
+    //
+    //     sem a flag: 126,0s        com a flag: 17,5s        7,2x
+    //
+    // A geometria não muda (verificado: 1600x1080 nos dois), o que importa
+    // porque o player acha a célula por aritmética (§8d) e qualquer mudança ali
+    // mostraria o quadro errado. O que muda é que o quadro exibido é o
+    // quadro-chave mais próximo, deslocado em no máximo um GOP — o mesmo
+    // compromisso que o §8g já aceita no seek do transcode.
+    //
+    // Medi também a alternativa de blocos com `-ss` que dava 22x na estimativa
+    // de origem: aqui deu 28,1s, PIOR que esta. Fica registrado pra ninguém
+    // refazer a medição achando que vai ganhar.
+    let rodar = |pular_nao_chave: bool| {
+        let mut cmd = Command::new("ffmpeg");
+        cmd.args(["-v", "error", "-y"]);
+        if pular_nao_chave {
+            cmd.args(["-skip_frame", "nokey"]);
+        }
+        cmd.arg("-i")
+            .arg(&file.path)
+            .args(["-vf", &filter, "-frames:v", "1", "-q:v", "6", "-an"])
+            .arg(&destination);
+        cmd.output()
+    };
+
+    let mut output = rodar(true).await.context("falha ao executar ffmpeg")?;
+
+    // Codec ou container que não coopera com a flag: refaz do jeito lento.
+    // Robustez num arquivo isolado vale mais que velocidade — o resultado
+    // errado é invisível, e o preview mostraria o quadro de outro instante.
+    if !output.status.success() {
+        tracing::debug!(
+            path = %file.path,
+            "skip_frame falhou, refazendo com decode integral"
+        );
+        output = rodar(false).await.context("falha ao executar ffmpeg")?;
+    }
 
     if !output.status.success() {
         anyhow::bail!(

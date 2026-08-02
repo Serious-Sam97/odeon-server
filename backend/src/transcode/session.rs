@@ -149,6 +149,116 @@ impl SessionManager {
         Ok(info)
     }
 
+    /// Abre (ou reaproveita) a transmissão de um canal.
+    ///
+    /// **Uma sessão por canal, compartilhada.** No transcode sob demanda cada
+    /// pessoa está num ponto diferente do arquivo, então a sessão é por
+    /// usuário. Ao vivo todos veem o mesmo instante — abrir um ffmpeg por
+    /// espectador seria desperdício puro, e ainda multiplicaria a banda puxada
+    /// do provedor.
+    pub async fn live(&self, channel_id: Uuid, stream_url: &str) -> anyhow::Result<SessionInfo> {
+        // Já existe transmissão deste canal? Entra nela.
+        {
+            let mut sessions = self.sessions.lock().await;
+            if let Some((_, s)) = sessions.iter_mut().find(|(_, s)| s.info.media_file_id == channel_id) {
+                s.info.last_access = Utc::now();
+                return Ok(s.info.clone());
+            }
+        }
+
+        let id = Uuid::new_v4();
+        let dir = self.root.join(id.to_string());
+        tokio::fs::create_dir_all(&dir).await?;
+
+        let args = self.build_live_args(stream_url, &dir);
+        tracing::info!(%id, %channel_id, "abrindo canal ao vivo");
+
+        let child = Command::new("ffmpeg")
+            .args(&args)
+            .kill_on_drop(true)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?;
+
+        let now = Utc::now();
+        let info = SessionInfo {
+            id,
+            // O canal ocupa o lugar do arquivo: é a identidade da transmissão.
+            media_file_id: channel_id,
+            start_seconds: 0.0,
+            created_at: now,
+            last_access: now,
+            encoder: "copy".to_string(),
+            plan: PlaybackPlan {
+                mode: super::decide::PlaybackMode::DirectStream,
+                video: StreamAction::Copy,
+                audio: StreamAction::Copy,
+                target_height: None,
+                burn_subtitle: None,
+                reasons: vec![
+                    "canal ao vivo: o provedor entrega MPEG-TS, que navegador nenhum toca"
+                        .into(),
+                    "vídeo e áudio são copiados bit a bit — só o container muda".into(),
+                ],
+            },
+        };
+
+        self.sessions
+            .lock()
+            .await
+            .insert(id, Session { info: info.clone(), dir, child });
+
+        Ok(info)
+    }
+
+    /// Argumentos do modo ao vivo.
+    ///
+    /// Duas diferenças que importam em relação ao sob demanda:
+    ///
+    /// - **janela deslizante** (`hls_list_size 6` + `delete_segments`): a
+    ///   transmissão não acaba, e uma playlist que só cresce encheria o disco
+    ///   até o fim dos tempos;
+    /// - **sem `-hls_playlist_type event`**: aquilo declara um começo fixo, e
+    ///   ao vivo não há começo — o player entra onde a transmissão está.
+    fn build_live_args(&self, stream_url: &str, dir: &Path) -> Vec<String> {
+        let mut args: Vec<String> = vec![
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            // Reconecta sozinho: fonte ao vivo cai, e derrubar o canal na
+            // primeira falha de rede seria pior que esperar alguns segundos.
+            "-reconnect".into(),
+            "1".into(),
+            "-reconnect_streamed".into(),
+            "1".into(),
+            "-reconnect_delay_max".into(),
+            "5".into(),
+            "-i".into(),
+            stream_url.to_string(),
+        ];
+
+        // Copia: o custo de recodificar N canais simultâneos não se paga, e o
+        // problema aqui é de CONTAINER, não de codec.
+        args.extend(
+            [
+                "-map", "0:v:0?", "-map", "0:a:0?",
+                "-c", "copy",
+                "-f", "hls",
+                "-hls_time", &SEGMENT_SECONDS.to_string(),
+                "-hls_list_size", "6",
+                "-hls_flags", "delete_segments+independent_segments+omit_endlist",
+                "-hls_segment_filename",
+            ]
+            .iter()
+            .map(|s| s.to_string()),
+        );
+        args.push(dir.join("seg%05d.ts").to_string_lossy().to_string());
+        args.push(dir.join(PLAYLIST_NAME).to_string_lossy().to_string());
+
+        args
+    }
+
     fn build_args(
         &self,
         source: &Path,

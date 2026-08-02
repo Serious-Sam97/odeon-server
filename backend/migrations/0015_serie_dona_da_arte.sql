@@ -1,0 +1,24 @@
+-- A coleção-série passa a ser dona da própria identidade.
+--
+-- Até aqui ela nascia no matcher como um agrupamento e nada mais: título, ano,
+-- e as colunas `overview`, `external_ids` e `artwork` intocadas. Nas 115 séries
+-- do acervo, `overview` era NULL em 115 e `external_ids` era '{}' em 115 — o
+-- identificador enriquece OBRAS, e a série nunca é uma obra.
+--
+-- Duas consequências, e a segunda é a cara:
+--
+--   1. Toda tela que mostra uma série mostra uma série sem sinopse.
+--
+--   2. O pôster e o backdrop que o provider devolve para um episódio são os da
+--      SÉRIE (arte por episódio é o `still`, que é outro campo). Baixando-os
+--      por obra, o acervo guardava a mesma imagem uma vez por episódio:
+--
+--          18.004 arquivos  →  1.429 imagens distintas
+--          2,19 GB          →  197 MB se guardasse uma cópia de cada
+--
+--      Uma delas estava salva 553 vezes.
+--
+-- `dominant_color` desce junto porque a cor sai da decodificação do pôster: se
+-- a série é dona do arquivo, é ela quem sabe a cor, e o episódio herda em vez
+-- de decodificar 553 vezes a mesma imagem.
+ALTER TABLE collection ADD COLUMN IF NOT EXISTS dominant_color text;

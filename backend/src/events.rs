@@ -46,6 +46,20 @@ pub enum AppEvent {
         done: u64,
         failed: u64,
     },
+    /// Um programa que alguém pediu pra ser avisado está começando.
+    ///
+    /// Vai pelo mesmo barramento do resto: o navegador já mantém UM `EventSource`
+    /// aberto, e abrir um segundo canal só pra isto seria conexão a mais pra
+    /// dizer a mesma coisa.
+    ProgrammeStarting {
+        programme_id: i64,
+        channel_id: Uuid,
+        channel_name: String,
+        title: String,
+        starts_at: chrono::DateTime<chrono::Utc>,
+        /// Pra quem é. Cada aparelho descarta o que não é do usuário logado.
+        user_id: Uuid,
+    },
 }
 
 pub type Bus = broadcast::Sender<AppEvent>;

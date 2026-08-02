@@ -16,7 +16,15 @@ cp .env.example .env
 ```
 
 Aponte `MEDIA_PATH` no `.env` pra onde estão suas mídias **no host**. Ela é
-montada read-only em `/media` dentro do container.
+montada em `/media` dentro do container, **com escrita**.
+
+> **A montagem tem escrita porque o "apagar do disco" da gaveta de gerenciar
+> (R10) precisa dela.** Se você não quer que o servidor consiga tocar nos seus
+> arquivos, acrescente `:ro` de volta nas três linhas `MEDIA_PATH` do
+> `docker-compose.yml` e rode `docker compose up -d`. Nada quebra: o botão de
+> apagar volta a nascer desabilitado explicando o porquê, porque
+> `GET /api/storage` testa escrita de verdade em vez de deduzir da
+> configuração.
 
 ```bash
 docker compose up -d --build
@@ -99,7 +107,9 @@ docker compose exec db psql -U odeon    # abrir o banco
   requisição — o browser já tem a folha inteira.
 - **Player próprio** (sem `<video controls>`): timeline com buffer, atalhos de
   teclado (espaço, ←/→, f, m), auto-hide, tela cheia
-- **Cor dominante do pôster** tingindo player, cards e timeline
+- **Cor dominante do pôster** extraída no match. Desde o redesenho ela fica na
+  *arte* — halo do herói e do player, borda do pôster — e o amarelo responde
+  pelo *sistema*: ação, foco, timeline, score (ver R1/R2)
 - **Sync ao vivo entre aparelhos** via SSE: pausar no notebook move a TV. Cada
   device ignora o próprio eco pelo `device_id`.
 - Design system com escala de espaço, tokens de movimento e
@@ -224,6 +234,22 @@ HTTPS é opcional e desligado por padrão (ver abaixo).
 | **M4** | Clientes | ✅ Compose Multiplatform: celular, TV e iOS — os três compilam |
 | **M5** | Curadoria | ✅ perfil de gosto, pgvector, contexto de tempo/humor, motivos |
 | **M6** | Playback pesado | ✅ negociação auditável, HLS sob demanda, hwaccel real, legendas ASS |
+| **R1** | Redesenho: o painel | ✅ marquise, herói "esta noite", motivos legíveis, manutenção fora da barra |
+| **R2** | Redesenho: o player | ✅ sala escura, tempo de arquivo × tempo de sessão, selo do modo |
+| **R3** | Redesenho: a biblioteca | ✅ série vira um cartão, contagem e paginação reais, +1 índice que faltava |
+| **R4** | Redesenho: coleções | ✅ aba de curadoria, contagem recursiva, criar sem prompt(), arrastar pra ordenar |
+| **R5** | Redesenho: revisão | ✅ pastas paginadas, um amarelo por decisão, a luz apagando ao tocar |
+| **R6** | Canais ao vivo | ✅ IPTV via M3U + XMLTV, guia com grade, sessão compartilhada por canal |
+| **R7** | Redesenho: a ficha da obra | ✅ vira cartaz com arte, ficha técnica e botão de assistir; edição atrás de um gesto |
+| **R8** | Locadora (aba `experimentação`) | ✅ 600 caixas de VHS e DVD em estantes por gênero, em CSS 3D, com contracapa |
+| **R17** | A arte da grade ao vivo | ✅ o XMLTV já mandava a foto e o Odeon a descartava: cobertura de 25% → 90%, e marquise da casa onde não há foto nenhuma |
+| **R16** | Área de administração | ✅ pessoas, aparelhos, trabalhos e as quatro manutenções em ensaio-antes-de-executar; sete rotas ganharam tela |
+| **R15** | Redesenho: para você | ✅ estados frio/morno/quente, calibragem por ♥/✕, motivo virou seção, e a marquise acende |
+| **R13** | Ilha de transmissão + emissora própria | ✅ canais que o Odeon programa do acervo, linha do tempo com agulha viva, zapeamento e "ver desde o início" |
+| **R12** | Vigia da grade + painel de saúde | ✅ guia ao vivo se repõe sozinho, lembretes sobrevivem à reimportação, e o que está torto aparece |
+| **R11** | Locadora: a caixa como objeto (experimento) | ✅ voa da estante, gira arrastando, e a lombada abre a caixa antes de tocar |
+| **R10** | Gerenciar a obra | ✅ cartão abre a ficha, ⋯ abre identificar à mão / corrigir parser / ignorar / apagar do disco |
+| **R9** | A série vira dona da arte | ✅ sinopse, ids e pôster na coleção-série; episódio herda em vez de baixar (2,19 GB → 197 MB) |
 
 Transcode ficou no M6 **de propósito**: é o maior sumidouro de complexidade do
 projeto, e via Tailscale nos seus próprios aparelhos o Direct Play cobre quase

@@ -98,11 +98,7 @@ pub async fn plan(
     };
 
     let plan = decide::plan(&media, &caps.to_capabilities());
-    let tracks = file
-        .probe
-        .as_ref()
-        .map(subtitles::from_probe)
-        .unwrap_or_default();
+    let tracks = todas_as_legendas(&file).await;
 
     Ok(Json(PlanResponse {
         direct_url: (!plan.needs_session()).then(|| format!("/api/stream/{media_file_id}")),
@@ -227,17 +223,29 @@ pub async fn capabilities(State(state): State<AppState>) -> Json<Value> {
 
 // ------------------------------------------------------------- legendas
 
+/// Todas as faixas: as embutidas no container e as que estão em arquivo ao
+/// lado. O player não precisa saber de onde vieram pra escolher uma.
+async fn todas_as_legendas(file: &FileRow) -> Vec<subtitles::SubtitleTrack> {
+    let mut faixas = file
+        .probe
+        .as_ref()
+        .map(subtitles::from_probe)
+        .unwrap_or_default();
+    faixas.extend(
+        subtitles::externas(std::path::Path::new(&file.path))
+            .await
+            .into_iter()
+            .map(|(_, t)| t),
+    );
+    faixas
+}
+
 pub async fn list_subtitles(
     State(state): State<AppState>,
     Path(media_file_id): Path<Uuid>,
 ) -> AppResult<Json<Vec<subtitles::SubtitleTrack>>> {
     let file = load_file(&state, media_file_id).await?;
-    Ok(Json(
-        file.probe
-            .as_ref()
-            .map(subtitles::from_probe)
-            .unwrap_or_default(),
-    ))
+    Ok(Json(todas_as_legendas(&file).await))
 }
 
 pub async fn subtitle_vtt(
@@ -245,6 +253,29 @@ pub async fn subtitle_vtt(
     Path((media_file_id, index)): Path<(Uuid, i32)>,
 ) -> AppResult<Response> {
     let file = load_file(&state, media_file_id).await?;
+
+    // Faixa em arquivo: acha o caminho e converte direto, sem passar pelo vídeo.
+    if subtitles::e_externo(index) {
+        let externas = subtitles::externas(std::path::Path::new(&file.path)).await;
+        let (caminho, track) = externas
+            .into_iter()
+            .find(|(_, t)| t.index == index)
+            .ok_or(AppError::NotFound)?;
+
+        if !track.text_based {
+            return Err(AppError::BadRequest(format!(
+                "a legenda {} é imagem — não vira texto sem OCR",
+                track.codec
+            )));
+        }
+
+        let vtt = subtitles::arquivo_para_webvtt(&caminho).await?;
+        return Ok((
+            [(header::CONTENT_TYPE, "text/vtt; charset=utf-8")],
+            vtt,
+        )
+            .into_response());
+    }
 
     let tracks = file
         .probe
