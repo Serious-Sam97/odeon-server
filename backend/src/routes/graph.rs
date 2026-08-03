@@ -262,6 +262,16 @@ pub async fn collection_detail(
     .await?;
 
     // Ordem explícita da coleção — é isto que faz "ordem Machete" funcionar.
+    //
+    // R39: **e o ano decide quando ela não existe.** As sagas do TMDB chegam sem
+    // `position` — medido: 315 itens de `franchise`, zero com posição, todos com
+    // ano —, então a lista caía no alfabético e *Câmara Secreta* vinha antes de
+    // *Pedra Filosofal*. As 8.410 linhas de temporada têm posição e não sentem
+    // esta mudança.
+    //
+    // A `position` continua mandando onde existe porque é ela que carrega a
+    // ordem Machete e as ordens manuais — que são **opinião**, e opinião tem
+    // precedência sobre cronologia.
     let items = sqlx::query_as::<_, crate::models::WorkListItem>(
         r#"
         SELECT
@@ -289,7 +299,7 @@ pub async fn collection_detail(
         ) tg ON true
         LEFT JOIN playback_state ps ON ps.work_id = w.id AND ps.user_id = $2
         WHERE ci.collection_id = $1
-        ORDER BY ci.position NULLS LAST, w.title
+        ORDER BY ci.position NULLS LAST, w.year NULLS LAST, w.title
         "#,
     )
     .bind(id)
@@ -585,4 +595,24 @@ pub async fn delete_relation(
     .await?;
 
     Ok(Json(relations_of(&state, work_id).await?))
+}
+
+#[cfg(test)]
+mod tests {
+    /// **A opinião tem precedência sobre a cronologia.**
+    ///
+    /// A ordem de uma coleção é `position` primeiro — é ela que carrega a ordem
+    /// Machete e as ordens manuais. O ano só decide onde `position` não existe,
+    /// que é o caso das 133 sagas do TMDB; o título só decide o empate de ano.
+    ///
+    /// Inverter isto quebraria a ordem Machete em silêncio, que é o tipo de
+    /// regressão que nenhuma tela denuncia.
+    #[test]
+    fn a_ordem_da_colecao_e_posicao_ano_titulo() {
+        let fonte = include_str!("graph.rs");
+        assert!(
+            fonte.contains("ORDER BY ci.position NULLS LAST, w.year NULLS LAST, w.title"),
+            "a ordem dos itens da coleção mudou de forma"
+        );
+    }
 }

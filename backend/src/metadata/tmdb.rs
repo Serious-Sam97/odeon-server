@@ -479,8 +479,23 @@ fn year_of(date: &Option<String>) -> Option<i32> {
 }
 
 fn image(path: &Option<String>, size: &str) -> Option<String> {
-    path.as_ref().map(|p| format!("{IMG}/{size}{p}"))
+    path.as_ref().map(|p| url_de_imagem(p, size))
 }
+
+/// A URL de uma imagem do TMDB a partir do caminho que ele devolve
+/// (`/mv0MySTq….jpg`).
+///
+/// Público porque o conserto das capas de saga (R38) remonta a URL a partir do
+/// caminho que a R32 deixou guardado no banco — o insumo do reparo já está lá,
+/// e nenhuma pergunta precisa ser refeita à API.
+pub fn url_de_imagem(caminho: &str, tamanho: &str) -> String {
+    format!("{IMG}/{tamanho}{caminho}")
+}
+
+/// Os tamanhos que o resto do código pede. São os mesmos do pipeline de série
+/// desde o M1: um pôster serve a moldura, um backdrop serve a tela inteira.
+pub const POSTER: &str = "w500";
+pub const BACKDROP: &str = "w1280";
 
 /// TMDB devolve string vazia em vez de null quando não tem sinopse.
 fn non_empty(value: Option<String>) -> Option<String> {
@@ -498,8 +513,8 @@ impl MovieHit {
             provider_id: self.id.to_string(),
             provider_kind: "movie".into(),
             year: year_of(&self.release_date),
-            poster_url: image(&self.poster_path, "w500"),
-            backdrop_url: image(&self.backdrop_path, "w1280"),
+            poster_url: image(&self.poster_path, POSTER),
+            backdrop_url: image(&self.backdrop_path, BACKDROP),
             genres: names_of(&self.genre_ids, genres),
             title: self.title,
             original_title: self.original_title,
@@ -518,8 +533,8 @@ impl TvHit {
             provider_id: self.id.to_string(),
             provider_kind: "tv".into(),
             year: year_of(&self.first_air_date),
-            poster_url: image(&self.poster_path, "w500"),
-            backdrop_url: image(&self.backdrop_path, "w1280"),
+            poster_url: image(&self.poster_path, POSTER),
+            backdrop_url: image(&self.backdrop_path, BACKDROP),
             genres: if self.genres.is_empty() {
                 names_of(&self.genre_ids, genres)
             } else {

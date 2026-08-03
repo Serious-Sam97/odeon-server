@@ -26,6 +26,7 @@ use uuid::Uuid;
 
 use crate::auth::AuthUser;
 use crate::conquistas::{self, Camada, Progresso};
+use crate::enfeites::{self, EnfeiteNaTela};
 use crate::error::{AppError, AppResult};
 use crate::AppState;
 
@@ -56,6 +57,8 @@ pub struct NaVitrine {
 #[derive(Debug, Serialize)]
 pub struct AmigoNoPlacar {
     pub id: Uuid,
+    /// R43 — é o que vira `/p/<nome>` quando alguém clica numa linha do placar.
+    pub username: String,
     pub display_name: String,
     pub nivel: i32,
     pub xp: i64,
@@ -78,6 +81,11 @@ pub struct PerfilCompleto {
     pub titulo_nome: Option<&'static str>,
     pub tags: Vec<String>,
     pub bio: Option<String>,
+    /// R43 — o rosto, a capa e a cor. Já resolvidos: a tela recebe o caminho
+    /// da arte e o hex, e não uma chave pra traduzir.
+    pub avatar: Option<EnfeiteNaTela>,
+    pub capa: Option<EnfeiteNaTela>,
+    pub moldura: Option<&'static str>,
     pub vitrine: Vec<NaVitrine>,
     pub conquistas: Vec<ConquistaNaTela>,
     /// Você e seus amigos, do maior nível pro menor.
@@ -89,6 +97,17 @@ pub struct PerfilCompleto {
     /// perfil — a tela de edição não precisa perguntar duas vezes.
     pub titulos_disponiveis: Vec<(&'static str, &'static str)>,
     pub tags_disponiveis: Vec<&'static str>,
+    /// Os três catálogos, **inteiros e com o estado de cada opção**.
+    ///
+    /// Aqui a regra do §48 — *a tela nunca oferece o que a validação vai
+    /// recusar* — não vira "esconder o trancado", e a diferença importa: a
+    /// lista de conquistas mostra as 80 com a descrição de cada uma, porque
+    /// *"uma conquista secreta é uma conquista que ninguém persegue"*. Um rosto
+    /// escondido é a mesma perda. O que a tela não faz é deixar **escolher** o
+    /// que está trancado — e o `aberto` de cada linha é o que diz isso.
+    pub rostos: Vec<EnfeiteNaTela>,
+    pub capas: Vec<EnfeiteNaTela>,
+    pub molduras: Vec<EnfeiteNaTela>,
 }
 
 /// O meu perfil.
@@ -102,12 +121,29 @@ pub async fn meu(State(state): State<AppState>, AuthUser(user): AuthUser) -> App
 /// amigos é tudo aberto, e um perfil é a coisa mais pública que alguém tem. O
 /// que um estranho vê aqui é nível, conquistas e uma vitrine que a própria
 /// pessoa montou — nada que ela não tenha escolhido mostrar.
+///
+/// **Aceita id ou nome de usuário** (R43). O link que se manda é `/p/rudney`:
+/// um UUID num endereço que alguém digita, lê em voz alta ou reconhece numa
+/// conversa é endereço de banco, não de gente. O id continua valendo porque o
+/// placar já tinha só ele.
 pub async fn de_alguem(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
-    Path(quem): Path<Uuid>,
+    Path(quem): Path<String>,
 ) -> AppResult<Json<PerfilCompleto>> {
-    montar(&state, quem, user.id).await.map(Json)
+    let id = match Uuid::parse_str(&quem) {
+        Ok(id) => id,
+        Err(_) => {
+            let achado: Option<(Uuid,)> = sqlx::query_as(
+                "SELECT id FROM app_user WHERE lower(username) = lower($1) AND is_active",
+            )
+            .bind(&quem)
+            .fetch_optional(&state.pool)
+            .await?;
+            achado.ok_or(AppError::NotFound)?.0
+        }
+    };
+    montar(&state, id, user.id).await.map(Json)
 }
 
 async fn montar(state: &AppState, quem: Uuid, eu: Uuid) -> AppResult<PerfilCompleto> {
@@ -146,13 +182,28 @@ async fn montar(state: &AppState, quem: Uuid, eu: Uuid) -> AppResult<PerfilCompl
         })
         .collect();
 
-    let guardado: Option<(Option<String>, Vec<String>, Option<String>, Vec<Uuid>)> = sqlx::query_as(
-        "SELECT titulo, tags, bio, vitrine FROM perfil WHERE user_id = $1",
+    type Guardado = (
+        Option<String>,
+        Vec<String>,
+        Option<String>,
+        Vec<Uuid>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let guardado: Option<Guardado> = sqlx::query_as(
+        "SELECT titulo, tags, bio, vitrine, avatar, capa, moldura
+         FROM perfil WHERE user_id = $1",
     )
     .bind(quem)
     .fetch_optional(&state.pool)
     .await?;
-    let (titulo, tags, bio, ids) = guardado.unwrap_or((None, Vec::new(), None, Vec::new()));
+    let (titulo, tags, bio, ids, avatar, capa, moldura) =
+        guardado.unwrap_or((None, Vec::new(), None, Vec::new(), None, None, None));
+
+    // Os catálogos são resolvidos contra o dono do perfil: quem olha vê o rosto
+    // que ELE escolheu, e o `aberto` de cada linha só interessa a quem edita.
+    let (rostos, capas_cat, molduras) = enfeites::disponiveis(&state.pool, &ja).await;
 
     // A vitrine resolve os ids na leitura, e a obra apagada some sozinha — é o
     // que a ausência de chave estrangeira compra. `ORDER BY array_position`
@@ -200,11 +251,19 @@ async fn montar(state: &AppState, quem: Uuid, eu: Uuid) -> AppResult<PerfilCompl
         titulo,
         tags,
         bio,
+        avatar: enfeites::escolhido(&rostos, avatar.as_deref()),
+        capa: enfeites::escolhido(&capas_cat, capa.as_deref()),
+        moldura: enfeites::cor_da_moldura(moldura.as_deref()),
         vitrine,
         conquistas: lista,
         amigos,
         titulos_disponiveis,
         tags_disponiveis,
+        // O catálogo inteiro só desce pro dono: pro visitante ele seria uma
+        // lista de coisas que ele não pode escolher no perfil de outra pessoa.
+        rostos: if meu { rostos } else { Vec::new() },
+        capas: if meu { capas_cat } else { Vec::new() },
+        molduras: if meu { molduras } else { Vec::new() },
     })
 }
 
@@ -216,21 +275,22 @@ async fn montar(state: &AppState, quem: Uuid, eu: Uuid) -> AppResult<PerfilCompl
 /// consulta agregada, e é a única parte deste módulo que não escala de graça.
 async fn placar(state: &AppState, dono: Uuid, eu: Uuid) -> AppResult<Vec<AmigoNoPlacar>> {
     let sql = format!(
-        "SELECT u.id, u.display_name, p.titulo
+        "SELECT u.id, u.username, u.display_name, p.titulo
          FROM app_user u
          LEFT JOIN perfil p ON p.user_id = u.id
          WHERE u.is_active AND (u.id = $1 OR u.id IN ({amigos}))",
         amigos = crate::routes::amigos::IDS_DOS_MEUS_AMIGOS,
     );
 
-    let gente: Vec<(Uuid, String, Option<String>)> =
+    let gente: Vec<(Uuid, String, String, Option<String>)> =
         sqlx::query_as(&sql).bind(dono).fetch_all(&state.pool).await?;
 
     let mut placar = Vec::with_capacity(gente.len());
-    for (id, nome, titulo) in gente {
+    for (id, username, nome, titulo) in gente {
         let p = conquistas::progresso(&state.pool, id).await;
         placar.push(AmigoNoPlacar {
             id,
+            username,
             display_name: nome,
             nivel: p.nivel,
             xp: p.xp,
@@ -304,6 +364,14 @@ pub struct NovoPerfil {
     pub tags: Vec<String>,
     pub bio: Option<String>,
     pub vitrine: Vec<Uuid>,
+    /// R43. `None` é "não escolhi" e é um valor legítimo — quem tirou o rosto
+    /// volta pra marca derivada do nome (R42).
+    #[serde(default)]
+    pub avatar: Option<String>,
+    #[serde(default)]
+    pub capa: Option<String>,
+    #[serde(default)]
+    pub moldura: Option<String>,
 }
 
 /// Salvar o próprio perfil.
@@ -343,18 +411,41 @@ pub async fn salvar(
         }
     }
 
+    // Os enfeites, pela mesma regra do título: **recusa, não descarta**. E a
+    // recusa cobre dois casos com a mesma frase — a conquista que falta e o
+    // rosto que este acervo não tem —, porque pra quem está do outro lado da
+    // tela os dois são "esta opção não é sua".
+    let (rostos, capas, molduras) = enfeites::disponiveis(&state.pool, &ja).await;
+    for (valor, catalogo, o_que) in [
+        (novo.avatar.as_deref(), &rostos, "rosto"),
+        (novo.capa.as_deref(), &capas, "capa"),
+        (novo.moldura.as_deref(), &molduras, "moldura"),
+    ] {
+        if let Some(chave) = valor.filter(|v| !v.is_empty()) {
+            if !enfeites::pode_usar(catalogo, chave) {
+                return Err(AppError::Forbidden(format!(
+                    "este {o_que} ainda não está disponível pra você"
+                )));
+            }
+        }
+    }
+
     // Os limites de tamanho são dos `CHECK` da 0031 — repeti-los aqui criaria
     // dois lugares pra discordar. O que este handler faz é traduzir a violação
     // pra 400 em vez de deixar sair 500 (§8b).
     let titulo = novo.titulo.as_deref().map(str::trim).filter(|t| !t.is_empty());
     let bio = novo.bio.as_deref().map(str::trim).filter(|b| !b.is_empty());
 
+    let vazio_e_nada = |v: &Option<String>| v.as_deref().map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
+
     let feito = sqlx::query(
-        "INSERT INTO perfil (user_id, titulo, tags, bio, vitrine, atualizado_em)
-         VALUES ($1, $2, $3, $4, $5, now())
+        "INSERT INTO perfil (user_id, titulo, tags, bio, vitrine, avatar, capa, moldura, atualizado_em)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
          ON CONFLICT (user_id) DO UPDATE SET
             titulo = EXCLUDED.titulo, tags = EXCLUDED.tags,
             bio = EXCLUDED.bio, vitrine = EXCLUDED.vitrine,
+            avatar = EXCLUDED.avatar, capa = EXCLUDED.capa,
+            moldura = EXCLUDED.moldura,
             atualizado_em = now()",
     )
     .bind(user.id)
@@ -362,6 +453,9 @@ pub async fn salvar(
     .bind(&novo.tags)
     .bind(bio)
     .bind(&novo.vitrine)
+    .bind(vazio_e_nada(&novo.avatar))
+    .bind(vazio_e_nada(&novo.capa))
+    .bind(vazio_e_nada(&novo.moldura))
     .execute(&state.pool)
     .await;
 

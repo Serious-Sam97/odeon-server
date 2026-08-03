@@ -1,4 +1,5 @@
 mod artwork;
+mod enfeites;
 mod auth;
 mod config;
 mod conquistas;

@@ -86,6 +86,19 @@ pub enum AppEvent {
     /// Vai pelo mesmo barramento do resto: o navegador já mantém UM `EventSource`
     /// aberto, e abrir um segundo canal só pra isto seria conexão a mais pra
     /// dizer a mesma coisa.
+    /// R46 — alguma coisa mudou numa sessão de "assistir junto".
+    ///
+    /// **O evento não carrega o estado**, só diz qual sala mexeu: quem estiver
+    /// nela relê. É de propósito — a posição do filme muda a cada pausa e a
+    /// cada pulo, e um evento que carrega estado obriga o cliente a decidir se
+    /// o que chegou é mais novo que o que ele tem. O estado mora na tabela, que
+    /// é uma fonte só (§46 da migração 0037).
+    Junto {
+        sessao: Uuid,
+        /// O que aconteceu, pra tela poder reagir sem reler tudo quando não
+        /// precisa: `estado`, `gente`, `recado` ou `fim`.
+        o_que: &'static str,
+    },
     ProgrammeStarting {
         programme_id: i64,
         channel_id: Uuid,
@@ -112,6 +125,11 @@ pub fn publish(bus: &Bus, event: AppEvent) {
 pub async fn stream(
     State(state): State<AppState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
+    // R44: fica. O barramento passou meses recusando toda conexão de navegador
+    // sem que nada aparecesse em lugar nenhum — `EventSource` reconecta em
+    // silêncio, e o servidor não dizia nem que alguém tinha batido na porta.
+    // Uma linha por conexão é barato e é o que teria denunciado aquilo.
+    tracing::info!("barramento: cliente conectou");
     let receiver = state.events.subscribe();
 
     let stream = BroadcastStream::new(receiver).filter_map(|message| match message {

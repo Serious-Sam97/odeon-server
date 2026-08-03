@@ -44,11 +44,37 @@ fn is_public(path: &str) -> bool {
 }
 
 /// Rotas buscadas diretamente por elementos HTML, que não mandam header.
+///
+/// ## R44 — o `EventSource` estava fora desta lista, e o barramento inteiro
+/// estava morto
+///
+/// `EventSource` **não manda header** — é a mesma limitação de `<img>` e
+/// `<video>`, e é justamente o que esta função existe pra resolver. Sem
+/// `/api/events` aqui, toda conexão do navegador ao barramento tomava **401**,
+/// e a API do `EventSource` reage a isso reconectando pra sempre, em silêncio:
+/// nenhum erro na tela, nenhum log no cliente, nada.
+///
+/// **Medido**: `GET /api/events?token=<mídia>` devolvia 401 enquanto o mesmo
+/// pedido com header de sessão devolvia 200; no navegador, `readyState = 2`
+/// (fechado) a cada tentativa.
+///
+/// O que estava morto por causa disso, tudo do M3 em diante: o aviso de
+/// programa agendado, as atualizações ao vivo do mural, o pedido de fita de
+/// volta na locadora — que o §49 chamou de *"o que separa uma rede social de um
+/// relatório"* — e a sincronia do player entre aparelhos.
+///
+/// **O que isto alarga, dito com todas as letras**: um token de mídia vazado
+/// passa a poder LER o barramento por 8 horas, além de baixar bytes. O
+/// barramento não carrega credencial nem conteúdo — carrega "o que está
+/// acontecendo na casa agora", que é o que o §49 já decidiu ser comum entre
+/// quem mora aqui. A alternativa era um terceiro tipo de token só pro
+/// barramento, e três escopos pra isso é mais máquina do que o risco pede.
 fn accepts_query_token(path: &str) -> bool {
     path.starts_with("/api/stream/")
         || path.starts_with("/api/hls/")
         || path.starts_with("/artwork/")
         || path.starts_with("/scrub/")
+        || path == "/api/events"
         || (path.starts_with("/api/media/") && path.contains("/subtitles"))
 }
 
@@ -152,6 +178,22 @@ pub async fn require_auth(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **R44 — o barramento aceita token na query, e é o único jeito.**
+    ///
+    /// `EventSource` não manda header. Tirar `/api/events` desta lista mata o
+    /// aviso de programa, o mural ao vivo, o pedido de fita e a sincronia do
+    /// player — tudo de uma vez e **sem nenhum erro na tela**, porque a API do
+    /// `EventSource` reconecta pra sempre em silêncio. Foi assim que ficou
+    /// quebrado sem ninguém notar.
+    #[test]
+    fn o_barramento_aceita_token_na_query() {
+        assert!(accepts_query_token("/api/events"));
+        // E continua sendo uma lista curta: nada de aceitar a API inteira.
+        assert!(!accepts_query_token("/api/works"));
+        assert!(!accepts_query_token("/api/perfil"));
+        assert!(!accepts_query_token("/api/auth/users"));
+    }
 
     #[test]
     fn rotas_de_boot_sao_publicas() {

@@ -6211,3 +6211,1052 @@ conserto de emergência.
 **E `attach_tag` devolve 500 pra obra inexistente**, onde devia ser 404. É a
 mesma família do §8b — errar com o código errado é a versão barulhenta de errar
 em silêncio. Não é buraco de segurança; é aspereza, e fica anotada.
+
+## 54. R38 — as capas das sagas, e a chamada que faltou
+
+Duas linhas da lista de quem decide, e elas são **um defeito só**:
+
+> *"Em guia o cartaz da semana tá quebrado"* · *"Na real diversas capas no guia
+> estão quebradas"*
+
+### O que estava medido
+
+| | |
+|---|---|
+| sagas com pôster **remoto** (`/mv0MySTq….jpg`) | **131** |
+| séries com pôster **local** (UUID no cache) | **113** |
+| sagas com cor dominante | **0 de 133** |
+
+As duas colunas guardam a mesma coisa e não guardam a mesma coisa. O front
+prefixa `/artwork/`, o `ServeDir` procura o arquivo no cache e responde 404 — a
+moldura fica vazia, e o "cartaz da semana" é justamente onde uma saga aparece
+sozinha e grande (`revista.rs`, `evento_da_semana`).
+
+### A causa é da R32, e ela tem nome
+
+O `metadata/saga.rs` gravava o `poster_path` cru do TMDB no `artwork` da
+coleção. O pipeline de série chama `artwork::fetch` desde o M1 — baixa, guarda
+no cache e devolve o caminho servível, com a cor dominante de brinde. Aqui a
+chamada faltou. Não houve decisão errada: houve uma linha que não foi escrita, e
+oito meses de moldura vazia por causa dela.
+
+**Guardar caminho quebrado é pior que guardar nada.** É o §18 pelo avesso: o
+campo tem cara de metadado válido, a tela acredita nele e desenha a moldura. Uma
+coluna vazia teria sumido sozinha (§24).
+
+### O conserto tem duas metades, e as duas moram no job
+
+Quem decide escolheu **a varredura dentro do próprio job de sagas**, e não uma
+rota nova nem um script de uma vez só. A razão é a mesma que o §3.5 do
+`IDEIAS-2.md` já tinha dado pro botão que vem a seguir: *"achei filmes novos"* e
+*"as capas deles apareceram"* devem ser um gesto só. Uma rota a mais seria uma
+sétima porta pra cuidar; um script descartável não serviria pra saga nova que
+quebrasse depois.
+
+**A varredura não custa uma chamada de API.** O caminho remoto que a R32 deixou
+no banco é o endereço da arte — o reparo só precisa remontar a URL e baixar. E
+o alvo da consulta é o **próprio estado errado** (`artwork->>'poster' LIKE
+'/%'`), então ela é retomável sem coluna de controle, pelo mesmo truque do resto
+do módulo: o que já foi consertado deixa de aparecer.
+
+O reparo roda **antes** da busca, porque não depende de rede lenta de API e
+porque a saga criada logo adiante já nasce com a arte no lugar — não há trabalho
+repetido. O `INSERT` da coleção não escreve mais arte nenhuma; quem escreve no
+`artwork` é o `baixar_arte`, e só depois do download.
+
+**Quando o download falha, o caminho remoto fica gravado** — de propósito. Ele é
+o único registro de onde a arte mora, e é o que faz a saga voltar a ser alvo na
+rodada seguinte. Não gravar nada perderia o endereço e exigiria uma chamada de
+API pra reencontrá-lo. O status conta essas como `capas_pendentes`, que é erro
+visível e não erro em silêncio (§8b).
+
+### Verificação
+
+Uma rodada completa do job, `POST /api/maintenance/aquecer-sagas`:
+
+| | |
+|---|---|
+| itens do job | **364** — 131 capas quebradas + 233 filmes sem saga |
+| capas baixadas | **260** — 131 pôsteres e 129 backdrops |
+| capas pendentes · falhas | **0** · **0** |
+| sagas novas nesta rodada | 0 · o acervo não mudou desde a R32 |
+
+Acervo depois, e é o contraste que prova:
+
+| | antes | depois |
+|---|---|---|
+| sagas com caminho remoto | **131** | **0** |
+| sagas com arquivo local | 0 | **131** |
+| sagas com cor dominante | 0 | **131** |
+
+A cor veio de graça, no mesmo `artwork::fetch` — 131 sagas que hoje tingem a
+própria moldura como toda série já tingia.
+
+Conferência visual em Firefox headless, contando `img.complete &&
+naturalWidth === 0`, que é exatamente o 404 na moldura:
+
+| tela | imagens | quebradas |
+|---|---|---|
+| guia | 222 | **0** |
+| coleções | 272 | **0** |
+
+O cartaz da semana desta semana é *Dr. Dolittle: Coleção*, e ele aparece.
+
+**232 testes**, três novos e todos no `saga.rs`: o `INSERT` da saga não escreve
+no `artwork`, a varredura mira o caminho remoto, e o arquivo do cache não é
+confundido com caminho do TMDB. O primeiro é regressão pura — é o teste que
+teria pego isto em 2025.
+
+### O que isto NÃO fecha, e fica dito
+
+**Duas sagas guardam `{"poster": null, "backdrop": null}`** — *The Red Hood
+Collection* e *F1 Collection*, que o TMDB não tem arte nenhuma. A chave existe
+com valor nulo, o que é herança do `INSERT` antigo. Hoje é inofensivo, porque
+nenhuma consulta testa `artwork ? 'poster'` numa `franchise` — só em `series` e
+em `work`. Mas é uma chave que responde "sim, tem pôster" pra quem perguntar
+assim, e isso é o §18 esperando a vez.
+
+**As 461 temporadas não têm pôster nenhum** — medido de passagem, e não mexido.
+Elas nunca tiveram; não é regressão desta rodada nem estava na lista.
+
+**O job continua sem botão.** A rota só é alcançável por `curl`, que é o item 3
+do `IDEIAS-2.md` e o próximo da fila.
+
+## 55. R39 — três defeitos pequenos, e um deles não era onde parecia
+
+O item 2 do `IDEIAS-2.md`: a ordem dentro da franquia, o canal da casa que não
+abria, e o player que começava curto. Nenhum é grande. Um deles tinha a causa
+no lugar errado, e é o que esta seção tem de interessante.
+
+### A ordem dentro de uma franquia
+
+> *"Em Coleções dentro de uma franquia a lista deveria estar ordenado por ano"*
+
+A consulta dos itens era `ORDER BY ci.position NULLS LAST, w.title`. **Medido:**
+
+| coleção | itens | com `position` | com ano |
+|---|---|---|---|
+| `season` | 8.410 | **8.410** | 8.410 |
+| `franchise` | 315 | **0** | 315 |
+
+As sagas do TMDB chegam sem posição, então caíam no alfabético — e é por isso
+que *Câmara Secreta* vinha antes de *Pedra Filosofal*. As temporadas têm posição
+em toda linha e não sentem a mudança.
+
+A ordem passou a ser `position → ano → título`. **A `position` continua mandando
+onde existe**, e isso não é detalhe de implementação: é ela que carrega a ordem
+Machete e as ordens manuais, que são **opinião** — e opinião tem precedência
+sobre cronologia. O ano só decide onde ninguém opinou.
+
+A regra não precisou olhar `origin`. A distinção que o `IDEIAS-2.md` §3.2
+descreve — *"dentro de uma coleção `provider`"* — já está codificada na própria
+`position`: quem tem ordem própria tem posição.
+
+### O canal da casa não abria
+
+> *"AO VIVO: Na linha do tempo eu não consigo clicar em cima dos canais odeon"*
+
+O clique chegava. O `onAbrir` procurava o bloco na **grade do IPTV**:
+
+```js
+const p = guia?.programas.find((x) => String(x.id) === b.id);
+if (p) setDetalhe(p);          // Odeon nunca acha, e some em silêncio
+```
+
+Os canais da casa são programados pela emissora (§25) *sem tabela* — o id deles
+é `slug:índice` (`odeon-1:7`), que nenhum id numérico de IPTV vai igualar. `p`
+vinha `undefined` e o `if` engolia. **É o §8b inteiro**: um clique que não faz
+nada não é recurso ausente, é recurso quebrado.
+
+O bloco da casa agora abre o **cartaz da obra**. Ele já carregava `work_id` —
+`ProgramaOdeon.work_id` é `Uuid`, não `Option<Uuid>`, porque a emissora programa
+a partir do acervo. Um programa de IPTV tem título e horário; um bloco do Odeon
+tem uma obra, que é mais.
+
+E a terceira saída deixou de ser o silêncio: bloco sem programa **e** sem obra
+agora diz isso na tela, em vez de repetir o defeito por outro caminho.
+
+### O player que começava curto — e a causa que estava em outro arquivo
+
+> *"Alguns filmes estão com o player estranho, começa com um tempo de filme mega
+> pequeno e vai aumentando ao longo que vai carregando"*
+
+O `IDEIAS-2.md` §3.4 apontou o mecanismo certo: a sessão HLS é criada com
+`-hls_playlist_type event` e sem `#EXT-X-ENDLIST`, então `video.duration` é a
+soma dos segmentos prontos e cresce enquanto o ffmpeg trabalha. E propôs que a
+barra passasse a usar a duração da obra.
+
+**Ela já usava.** O commit anterior a este documento (515b55c, 02/08) tinha feito
+exatamente isso — `total` sai de `work.duration_seconds`, a duração do stream
+ficou só marcando até onde dá pra pular, e a timeline até pinta o trecho fora de
+alcance. A proposta já estava implementada um dia antes de ser escrita.
+
+O que sobrou foi **quem entrega a obra ao player**. O menu de DVD monta o objeto
+à mão, com um comentário que dizia *"manda o mínimo que `Player` usa"*:
+
+```js
+{ id, title, year, media_file_id, poster, dominant_color }
+```
+
+`duration_seconds` não estava na lista, e o `MenuDoDisco` tinha o número o tempo
+todo (`duracao`). Sem ele o player caía no `offset + streamDuration`, que é
+justamente o número que cresce. **Por isso "alguns filmes"**: o sintoma não
+depende do arquivo, depende da porta — só os filmes abertos pelo menu de DVD, e
+esse é o caminho principal da locadora.
+
+O comentário estava errado antes do código: um "mínimo" enumerado à mão envelhece
+calado quando quem consome ganha um campo novo.
+
+### Verificação
+
+A franquia do Harry Potter, pela rota da coleção:
+
+| antes | depois |
+|---|---|
+| *Câmara Secreta* · *Cálice de Fogo* · *Enigma do Príncipe* … | **2001 Pedra Filosofal · 2002 Câmara Secreta · 2004 Prisioneiro de Azkaban · 2005 Cálice de Fogo · 2007 Ordem da Fênix · 2009 Enigma do Príncipe · 2010/2011 Relíquias 1 e 2** |
+
+Uma temporada de série conferida no mesmo caminho continua em 1, 2, 3, 4, 5, 6 —
+a `position` mandando, como antes.
+
+Em Firefox headless, na aba "ao vivo": clicar no bloco *Sonic 3: O Filme* da
+pista `Odeon 1` abre o cartaz da obra, com arte, elenco e "você sabia". Antes,
+nada acontecia.
+
+E o player, aberto pelo caminho da mão — prateleira → caixa → abrir → tocar →
+menu → *Tocar*, com ponteiro de verdade no `.tocar` porque `setPointerCapture`
+redireciona o `click`:
+
+| | relógio na tela | `video.duration` |
+|---|---|---|
+| aos 23s | `0:23 / **42:52**` | **44,3 s** |
+| aos 43s | `0:43 / **42:52**` | 2.573 s |
+
+A segunda coluna é o defeito ao vivo: a duração do stream **era** de 44 segundos
+enquanto o filme tem 42 minutos, e ela quadruplicou de tamanho em vinte segundos.
+A primeira não se moveu. `duration_seconds` da obra no banco: **2.572,959 s** —
+que é o `42:52` da tela.
+
+**233 testes**, um novo: a ordem da coleção é `position → ano → título`, porque
+inverter isso quebraria a ordem Machete em silêncio e nenhuma tela denunciaria.
+
+### O que isto NÃO fecha
+
+**Os outros campos que o menu de DVD não manda.** `series_title`,
+`season_number`, `episode_number`, `height`, `video_codec` e `audio_codec`
+continuam ausentes — o `MenuDoDisco` não os carrega, e o cabeçalho do player
+mostra menos ficha técnica quando o filme vem por essa porta. É cosmético, ao
+contrário da duração, e consertá-lo é aumentar a resposta do menu.
+
+## 56. R40 — os aquecimentos ganham porta, e a varredura ganha um fim
+
+> *"Como dou refresh nas coleções para pegar filmes novos?"*
+
+A resposta honesta era: **por `curl`.** A rota `POST /api/maintenance/aquecer-sagas`
+existe desde a R32 e nunca teve botão.
+
+### O §27 outra vez, e três em vez de uma
+
+O `IDEIAS-2.md` §3.5 pediu *"botão na aba admin, ao lado dos outros
+aquecimentos"*. **Medido: não havia outros.** Os três — `aquecer-trivia` (R14),
+`aquecer-producao` (R22) e `aquecer-sagas` (R32) — estavam no mesmo estado, sem
+cliente nenhum.
+
+É literalmente o defeito que o §27 corrigiu uma vez: *"sete rotas existiam sem
+nenhum cliente, e quatro delas só eram alcançáveis por `curl`"*. Um poder no
+backend que nenhuma tela alcança não é um poder do produto — é uma anotação.
+
+Quem decide escolheu fechar a família inteira. A seção **Aquecimentos** nasce com
+os três, ao lado da Manutenção e com a mesma grade de cartões.
+
+**E sem ensaio, ao contrário da Manutenção logo abaixo.** A diferença não é de
+cuidado, é de natureza: manutenção *reescreve* o acervo — reparse, títulos de
+episódio, artwork órfão —, e por isso o §27 pôs o `dry_run` na frente dela. Um
+aquecimento **preenche o que está vazio**: pergunta ao provider o que ainda não
+foi perguntado e grava onde não havia nada. Não há o que ensaiar.
+
+O progresso não foi reinventado: ele já existia em **Trabalhos**, e cada cartão
+mostra o do seu próprio `kind`. Enquanto algo roda, a tela recarrega **só a lista
+de trabalhos**, de dois em dois segundos — as outras três chamadas do painel
+(contas, aparelhos, diagnóstico) não mudam porque um job andou.
+
+O cartão diz o que o job publica: rodando, é `feitos de total · onde está`; parado,
+é `concluiu 03/08 · 364 de 364`. E **"nunca rodou" quando nunca rodou** — não um
+`0 de 0` com cara de resultado (§18).
+
+### A varredura chama as sagas — depois da identificação
+
+A segunda metade do §3.5: *"a varredura chamar as sagas no fim, pra 'achei filmes
+novos' e 'as sagas deles apareceram' serem um gesto só"*.
+
+**O lugar certo não é depois da varredura, é depois da identificação.** O alvo do
+job de saga é filme com `match_state IN ('auto','confirmed')` e id do TMDB —
+encadeá-lo logo após o `scan_all` acharia **zero**, porque nenhum arquivo novo foi
+identificado ainda. E seria um defeito invisível: o job rodaria, terminaria bem, e
+não faria nada.
+
+Então ele entra no fim da corrente que já existia (`?then=match`), depois do
+`run_matching` e da publicação do `MatchFinished`. Rodar de novo é barato e sempre
+seguro — o alvo é "filme sem franquia", então a segunda passada custa as chamadas
+dos avulsos e mais nada, e desde a R38 ela ainda conserta capa de saga que tenha
+ficado com caminho remoto.
+
+`Job::start` devolvendo `None` ali é o caso normal de "já há um rodando", e não um
+erro: quem apertou o botão à mão ganha a rodada, e o encadeamento não precisa de
+uma segunda.
+
+### Verificação
+
+Em Firefox headless, na aba admin: a seção mostra os três cartões com o estado de
+cada um lido do histórico — `concluiu 02/08 · 23 de 23` na trivia,
+`concluiu 02/08 · 548 de 548` na produção.
+
+Clicando **aquecer** nas sagas, sem recarregar a página:
+
+| | o cartão |
+|---|---|
+| ao clicar | o botão vira `rodando…` e desabilita |
+| +6s | `20 de 233 · 1408` |
+| +30s | `180 de 233 · Patch Adams: O Amor é Contagioso` |
+
+O número e o título vêm do `progress` que o job já publicava desde a R32 e que
+ninguém lia.
+
+**234 testes**, um novo: as sagas são encadeadas **depois** do `run_matching`
+dentro do `start_scan`. Ele compara as posições das duas chamadas no arquivo,
+porque inverter a ordem não quebra compilação, não quebra teste de tipo e não
+aparece na tela — só faz o encadeamento não achar nada.
+
+### O que NÃO foi exercido, e fica dito
+
+**O encadeamento não foi rodado de ponta a ponta.** Fazer isso hoje significaria
+varrer os 17.500 arquivos (2m20 na última medição) e, na sequência, identificar as
+**4.410 obras sem match** deste servidor — que é acervo de verdade de três
+pessoas, não fixture. A ordem das chamadas está travada por teste e o caminho é o
+mesmo do botão, que foi exercido ao vivo; a corrente inteira será exercida na
+próxima varredura de verdade.
+
+## 57. R41 — o desafio onde se cai, e a loja abrindo
+
+Duas coisas baratas do `IDEIAS-2.md`, e as duas aparecem todo dia.
+
+### Os desafios no "para você"
+
+> *"Colocar os desafios também na aba para você"*
+
+Eles moram no perfil desde a R35, e o perfil **é onde se vai de propósito**; o
+"para você" é onde se cai. Um desafio que só existe na tela que se visita de
+propósito é um desafio que se esquece.
+
+**O componente saiu do `Perfil.tsx` e virou arquivo.** Copiar a lista pra segunda
+tela criaria dois lugares pra consertar o mesmo desafio, e eles divergiriam no
+primeiro conserto — é a mesma razão que fez o `so_manual` do §53 virar função
+usada por cinco rotas.
+
+**A cadência não foi junto**, e isso é a regra e não uma economia: ela é ajuste, e
+ajuste não se repete em duas telas. Continua só no perfil, que é onde se vai
+mexer nas suas coisas.
+
+**E ele ficou fora do estado frio.** A faixa "continue de onde parou" só existe
+quando `conhecimento < 1` — menos de seis sinais. Pendurar os desafios ali dentro
+os faria sumir exatamente quando o Odeon passa a te conhecer, que é quando a
+pessoa usa mais o produto. Medido nesta conta: `conhecimento >= 1`, a faixa não
+renderiza, e os desafios aparecem assim mesmo — logo abaixo da barra de tempo e
+antes do que a curadoria sugere. **O que você se comprometeu a fazer vem antes do
+que a máquina achou.**
+
+### A loja abrindo, no lugar do spinner
+
+> *"Adicionar um loading legal na Locadora"*
+
+O que havia era a frase *"acendendo as luzes…"* e mais nada: as quarenta caixas
+chegavam juntas e a página saltava quando chegavam.
+
+As prateleiras agora nascem com **a madeira desenhada e vazias**, e as caixas caem
+uma a uma na ordem da estante — 34ms entre caixas, 90ms entre estantes, com teto
+de oito estantes pra cascata não ficar mais longa que a paciência de quem só quer
+pegar um filme. É a mesma escolha da grade de capítulos do §47 (moldura vazia em
+vez da palavra "carregando"), com o vocabulário da loja.
+
+**A queda é `translate`, e não `transform`** — e essa é a única sutileza técnica
+do trabalho. A caixa já tem uma pose 3D (`rotateX(3deg) rotateY(22deg)`) e um
+`transition` de `transform` que o hover usa: animar `transform` apagaria a pose
+durante a queda, e a caixa cairia plana e giraria de repente ao pousar. A
+propriedade `translate` compõe com a `transform` em vez de substituí-la.
+
+`animation-fill-mode: backwards` é o que segura cada caixa invisível durante o
+próprio atraso — sem ele as quarenta aparecem no primeiro quadro e só então
+começam a cair, que é o oposto do que se quer. E a animação roda na montagem e só
+nela: devolver uma fita não faz a loja inteira cair de novo.
+
+### O salto de 16px que a medição achou
+
+A primeira versão reservava, na prateleira vazia, a altura de uma caixa de DVD
+(184px) mais o respiro do hover (46px) = 230px. **Medido no navegador: das 13
+estantes desta loja, 7 mediam 230px e 6 mediam 246px** — porque a fita é 16px mais
+alta que o disco, e a estante que tem uma fita cresce.
+
+Ou seja: metade das estantes ia saltar 16px na chegada das caixas, que é
+exatamente o defeito que este trabalho existia pra remover. Reservar o outro
+número inverteria o problema.
+
+O conserto não foi escolher melhor: **a fileira passou a ter piso fixo**, o da
+caixa mais alta da loja. Agora a reserva bate por construção em vez de por acerto,
+e as 13 estantes medem 246px em qualquer instante. O ganho veio dobrado — com
+todas as prateleiras da mesma altura, as tábuas se alinham entre estantes de
+conteúdo diferente.
+
+### Verificação
+
+Em Firefox headless, com `getAnimations()` contando o que ainda está no ar:
+
+| instante | estantes vazias | caixas | no ar | alturas distintas |
+|---|---|---|---|---|
+| ao entrar | **4** | 5 | 5 | `[246]` |
+| +0,7s | 0 | 54 | **49** | `[246]` |
+| +7s | 0 | 54 | **0** | `[246]` |
+
+Uma altura só nos três instantes — nada se moveu. E a pose 3D sobreviveu à queda:
+a matriz computada da primeira caixa é `matrix3d(0.927184, 0.0196054, …)` no meio
+do voo, e não uma translação pura.
+
+Os desafios, nas duas telas:
+
+| | "para você" | perfil |
+|---|---|---|
+| classe | `desafios compacto` | `desafios` |
+| cadência | **ausente** | `todo dia · 3 em 3 dias · toda semana`, com "toda semana" ligada |
+| itens | 3 | 3 |
+
+O typecheck passa e os **234 testes** continuam verdes — nenhum é de front, que é
+a assimetria mais antiga desta base e não é desta rodada.
+
+## 58. R42 — a sala de gente, e a marca que ainda não é avatar
+
+> *"Lista de amigos"*
+
+**Decidido: melhorar o que já existe em mural › gente** — sem aba nova, sem
+painel lateral. O que muda é o que cada linha diz, não onde ela mora.
+
+A sala listava **nome e um botão**, e era tudo. Entraram quatro coisas, e
+**nenhuma é dado novo** — as quatro já existiam em algum lugar do produto e não
+chegavam nesta tela:
+
+| | de onde veio |
+|---|---|
+| a marca da pessoa | desenhada do nome, aqui |
+| o que está vendo agora | a **presença**, que o mural já busca de 30 em 30s |
+| falar com ela | a sala de conversas, ao lado |
+| o perfil dela | a aba perfil, que já sabia abrir o de outra conta (§48) |
+
+A presença não ganhou uma segunda consulta: a sala recebe a mesma lista que o
+painel lateral do mural já usa e cruza por id. Duas requisições pra mesma
+pergunta dariam à tela a chance de discordar de si mesma sobre quem está online
+— que é o argumento do §49 pras duas listas da presença, aplicado de novo.
+
+### A marca não é o avatar do §4.1, e é de propósito
+
+O `IDEIAS-2.md` §4.2 pede "avatar", e o §4.1 **decide** o que ele será: vários
+prontos pra escolher, parte deles atrás de conquista, sem upload. Isso é a fase
+seguinte, e não há coluna nenhuma no banco hoje.
+
+O que entrou aqui é a **marca de quem ainda não escolheu**: um disco desenhado
+em SVG com a inicial, a cor tirada do nome por hash e uma figura geométrica
+entre quatro. Mesma conta, mesma marca, em toda tela e em toda sessão.
+
+Isso não é trabalho jogado fora quando o §4.1 chegar: **ninguém nasce com avatar
+escolhido**, e a marca continua sendo o padrão dessa conta. É a régua do §12 —
+*zero bytes* —, a mesma que recusou CDN de fonte, sintetizou a trilha do menu
+(§47) e desenhou o ícone de controles da barra (§52).
+
+Quatro figuras e não doze: a marca serve pra reconhecer alguém numa lista de três
+a dez pessoas, e nisso a cor já faz quase todo o trabalho — a figura é o que
+separa duas contas que caíram em cores parecidas. Neste servidor isso já
+aconteceu: `rudney` e `r42teste` começam com a mesma letra.
+
+E a figura fica atrás da inicial, bem apagada: ela é textura, não desenho. Uma
+figura que compete com a letra deixa a lista mais difícil de ler, que é o oposto
+do que um avatar faz numa lista.
+
+### As duas portas, e o que elas não oferecem
+
+"falar" e "perfil" são atalhos, e têm peso menor que a ação de amizade —
+"desfazer" é uma decisão, e as três com o mesmo peso competiriam.
+
+**"falar" não aparece na busca.** Falar é entre amigos (§49), e oferecer o botão
+pra quem vai levar recusa é o produto mentindo pra si mesmo — a mesma regra que
+o §53 aplicou ao botão de editar o grafo.
+
+E "o que está vendo" **não é link**: o cartaz da obra alheia é uma segunda
+decisão, e esta linha é sobre a pessoa.
+
+### Dois estados que a tela poderia ter errado
+
+**O atalho é de uma vez só.** A sala de conversas remonta a cada visita, e um
+`useEffect` com o valor ainda guardado reabriria, dias depois, a conversa de quem
+foi atalhado uma vez. Um atalho que se repete sozinho deixou de ser atalho —
+então quem consome avisa, e o valor é limpo.
+
+**Ir pro perfil pela barra é sempre ir pro seu.** Sem isso, quem espiou o perfil
+de um amigo pela sala de gente encontraria o dele de novo ao clicar em "perfil"
+no menu, e concluiria — com razão — que o menu está quebrado. E a `key` do
+componente troca com a pessoa olhada, porque `Perfil` semeia o estado a partir da
+prop: sem ela, o segundo clique num amigo diferente não mudaria nada.
+
+### Verificação
+
+Com uma conta descartável (`r42teste`) online e com um `playback_state` fresco,
+em Firefox headless:
+
+| linha | marca | o que está vendo | anel | botões |
+|---|---|---|---|---|
+| gabriel | ✓ | — | não | falar · perfil · desfazer |
+| **r42teste** | ✓ | **"vendo Drive"** | **sim** | falar · perfil · desfazer |
+| rudney | ✓ | — | não | falar · perfil · desfazer |
+
+Clicar em "falar" na linha do `r42teste` abre a sala de conversas **já com ele
+selecionado** (`.conversa-item.on` = `r42teste`); clicar em "perfil" abre o
+perfil dele. As duas coisas não faziam nada antes porque não existiam.
+
+A conta de teste, a amizade, a sessão e o `playback_state` dela foram apagados
+depois — `DELETE FROM app_user` e o cascade limpa o resto. **Nenhuma opinião
+inventada ficou atribuída a pessoa real.**
+
+Typecheck limpo; os **234 testes** seguem verdes e nenhum deles é de front, que é
+a assimetria mais antiga desta base.
+
+## 59. R43 — o perfil como o da Steam, e o endereço que o projeto não tinha
+
+Quatro coisas foram decididas no `IDEIAS-2.md` §4.1: **rosto e capa escolhidos
+de um conjunto pronto, vitrine montável, perfil com URL, e uma moldura que sai
+das conquistas.** Esta seção entrega as quatro, e duas saíram diferentes do que
+a proposta dizia — por decisão de quem decide, nos dois casos.
+
+### O SVG que não foi
+
+A proposta era desenhar os avatares em SVG, pela régua de zero bytes do §12.
+Quem decide vetou:
+
+> *"o rosto de alguns atores, diretores, pessoal de música… e algumas capas que
+> são capas usadas em próprios filmes"*
+
+É melhor, e por um motivo que a proposta não tinha visto: **a arte já está no
+disco.** Medido antes de escrever uma linha:
+
+| | com imagem no cache local |
+|---|---|
+| atores | **5.606** |
+| diretores | **381** |
+| compositores | **249** |
+| filmes | todo identificado tem backdrop |
+
+O rosto não custa um byte novo a servir — é o mesmo `/artwork/…` que a ficha já
+usa desde o M2. **Fica zero bytes e fica do acervo de quem olha**, que é mais do
+que o desenho geométrico entregaria.
+
+### O catálogo é código, e o vínculo é temático
+
+Mesma decisão da lista de conquistas (§48) — *"quem escreve a lista é quem
+programa"*. Dezoito linhas em `enfeites.rs`: doze rostos, seis capas, quatro
+cores. Metade aberta, metade atrás de conquista, como o §4.1 pediu — e há teste
+que falha se essa proporção mudar.
+
+**O vínculo não é sorteado**, e é o que faz ele valer alguma coisa:
+
+| rosto | abre com |
+|---|---|
+| Sigourney Weaver | 10 de ficção científica |
+| Quentin Tarantino | 10 de crime |
+| David Fincher | 10 de madrugada |
+| Uma Thurman | maratona de 6 num dia |
+| Steven Spielberg | sete décadas |
+| Hans Zimmer | Cinéfilo — 100 obras |
+
+As capas trancadas seguem a mesma regra pelo gênero do filme: *Akira* com dez de
+animação, *Corra!* com dez de terror, *Duna* com cinquenta de ficção científica.
+
+Cada entrada aponta pra uma pessoa **pelo nome** e pra um filme **pelo título**.
+Quem não está neste acervo não aparece na lista, em vez de virar moldura vazia
+(§18) — o que torna o catálogo portátil de graça: o mesmo código em outro acervo
+oferece outros rostos, sem migração e sem erro. **Neste, os dezoito resolveram.**
+
+### O trancado aparece, e isso não contradiz o §48
+
+A regra do §48 é que *a tela nunca ofereça o que a validação vai recusar*, e ela
+continua valendo: a opção trancada não é clicável, e o servidor recusa a chave
+com 403 — **medido**: `{"error":"este rosto ainda não está disponível pra você"}`
+ao tentar gravar Hans Zimmer sem a conquista.
+
+O que a tela faz é **mostrar** o trancado, em cinza, com o nome da conquista que
+o abre. Esconder seria o erro que a própria lista de conquistas não comete ao
+exibir as 80 com descrição: *"uma conquista secreta é uma conquista que ninguém
+persegue"*. Um rosto secreto é a mesma perda.
+
+### A vitrine tinha coluna e não tinha tela
+
+A `vitrine` existe no banco desde o §17, com `CHECK (cardinality <= 6)`, e a
+tela de escolher **nunca existiu** — a vitrine de todo mundo estava vazia porque
+não havia como enchê-la. Agora há: busca, seis vagas, remover, e setas pra
+ordenar.
+
+Setas e não arrastar, ao contrário da tela de coleções: lá a lista tem dezenas
+de itens e arrastar é o gesto certo; aqui são seis, e um alvo de arrastar de
+84px numa lista de seis não é ganho, é chance de errar.
+
+### O endereço, e por que entrou um router
+
+O Odeon não tinha URL nenhuma: **as telas eram estado de aba**. O §4.1 pediu
+*"um link que dá pra mandar"*, e a primeira proposta foi `pushState` em vinte
+linhas, sem dependência — pela mesma régua de sempre.
+
+Quem decide respondeu outra coisa:
+
+> *"eu quero futuramente tudo linkável, então já coloca"*
+
+E aí a conta vira outra. Um perfil endereçável se resolve à mão; **todas** as
+telas endereçáveis — com filtro, histórico e voltar — é escrever um router pior.
+`react-router-dom` é a quarta dependência deste front, e entra sabendo disso.
+
+O que ele **não** resolve, e é o que a discussão esclareceu: o caminho bonito
+precisa do servidor devolvendo `index.html` pra um caminho que não é arquivo.
+Isso é do nginx, com router ou sem ele. Daí o `web/nginx.conf`, e ele foi
+exercido de verdade — a imagem `runtime` foi construída e sondada:
+
+| caminho | resposta |
+|---|---|
+| `/` | 200 |
+| `/p/sam` | **200**, com o `index.html` |
+| `/biblioteca` | **200** |
+
+Sem essa configuração, um link compartilhado daria 404 e a página nem carregaria
+— o router mora no navegador, e o navegador nunca teria recebido o navegador.
+
+**A troca no `App.tsx` foi pequena de propósito**: o corpo continua desenhando
+por `tab`, e o que mudou é de onde `tab` vem — do `useLocation`, e não de um
+`useState`. Reescrever as onze telas como `<Routes>` aninhadas seria uma reforma
+num arquivo de mil linhas pra chegar no mesmo lugar. As rotas são em português,
+como o resto do projeto: `/biblioteca`, `/colecoes`, `/ao-vivo`, `/p/<nome>`.
+
+**E o link é por nome, não por id.** A rota aceita os dois — o placar só tinha o
+id —, mas o que se copia é `/p/sam`: um UUID num endereço que alguém digita ou
+lê em voz alta é endereço de banco, não de gente.
+
+**"Público" quer dizer dentro de casa**, e foi decidido assim: quem recebe o link
+faz login como sempre. Abrir uma rota sem sessão seria o primeiro furo
+deliberado no `require_auth`, e o §49 firmou que quem vê o que você faz é quem
+você aceitou.
+
+### Verificação
+
+Em Firefox headless, **entrando direto pelo link**, sem passar pela home:
+
+| | |
+|---|---|
+| `/p/sam` | abre o perfil, capa desenhada, rosto **Robin Williams**, cor `#e0b062` |
+| `/locadora` | abre a locadora com a aba certa acesa |
+| botão voltar | devolve `/p/sam` com o perfil na tela |
+| botão de link | copia `/p/sam` |
+
+As três galerias, com o estado de cada opção lido do DOM:
+
+| galeria | abertas | trancadas |
+|---|---|---|
+| rosto | 6 | **6**, cada uma dizendo a conquista que a abre |
+| capa | 3 | **3** |
+| cor | 1 | **3** |
+
+E a recusa do servidor conferida por fora: gravar um rosto trancado devolve 403
+com a frase, em vez de gravar e mostrar sucesso.
+
+**238 testes** — quatro novos, todos no catálogo: metade nasce aberta, toda
+conquista citada existe de verdade, nenhuma chave se repete, e a moldura guarda
+nome e cor separados. O último nasceu de um defeito que o screenshot achou: a
+galeria de cores mostrava `#4ea36b — abre com a conquista "Sócio"`, que é
+endereço de memória pra quem está escolhendo uma cor.
+
+### O que ficou de fora, e fica dito
+
+**A tela do perfil é a única endereçável de verdade.** As onze abas têm caminho,
+mas o estado interno delas não: o filtro da biblioteca, a obra aberta na ficha e
+a sala do mural continuam invisíveis na URL. Isso é o que falta pra "tudo
+linkável" valer a palavra, e agora é barato — o router já está aqui.
+
+**Os enfeites do `sam` foram desfeitos depois do teste.** Rosto, capa, cor e uma
+bio de exemplo foram gravados pra fotografar a tela e removidos em seguida: a
+escolha é dele, e uma bio inventada num perfil de pessoa real é exatamente o que
+o §18 chama de mentir com cara de metadado.
+
+## 60. R44 — a notificação do agendamento, e o barramento que estava morto
+
+> *"Adicionar uma notificação para receber os agendamentos"*
+
+O `IDEIAS-2.md` §3.6 decidiu que faltava **a notificação do sistema, fora da
+aba**, e propôs `Notification` do navegador com a permissão pedida na hora de
+agendar.
+
+**Isso já estava no código** — como no §3.4, escrito no commit 515b55c, um dia
+antes do documento. A permissão era pedida no clique; o `new Notification` era
+disparado no evento `programme_starting`. Tudo escrito, e nada funcionando.
+
+### O defeito: `/api/events` recusava toda conexão de navegador
+
+`EventSource` **não manda header**. É a mesma limitação de `<img>` e `<video>`,
+e é exatamente pra isso que existe a lista `accepts_query_token` do §43 — as
+rotas que aceitam `?token=` porque quem as busca é o próprio HTML.
+
+`/api/events` **não estava nessa lista**. Medido, e o contraste é a prova:
+
+| pedido | resposta |
+|---|---|
+| `GET /api/events` com header de sessão | **200** |
+| `GET /api/events?token=<mídia>`, que é o que o navegador faz | **401** |
+
+E a API do `EventSource` reage a 401 **reconectando pra sempre, calada**: sem
+erro na tela, sem log no cliente, sem nada. No navegador, `readyState = 2` a
+cada tentativa.
+
+O que estava morto por causa disso, tudo do M3 em diante:
+
+- o aviso de programa agendado — o pedido desta fase;
+- as atualizações ao vivo do mural;
+- o pedido de fita de volta na locadora, que o §49 chamou de *"o que separa uma
+  rede social de um relatório"*;
+- a sincronia do player entre aparelhos.
+
+### E, atrás dele, mais dois
+
+Consertar a lista não bastou, e os dois seguintes só apareceram porque a
+verificação continuou até o aviso **chegar de verdade na tela**.
+
+**A URL congela na criação.** O `renovar()` do boot não é esperado por ninguém —
+*"a arte carrega quando ele chegar"*, e pra uma `<img>` isso é verdade porque
+ela recarrega. Um `EventSource` monta a URL uma vez: nascido antes do token, ele
+nasce errado e morre assim. Quem abria o Odeon direto numa tela com barramento
+nunca recebia evento; quem passeava por outras abas antes recebia, porque o
+token tinha chegado no meio do caminho. **Daí o defeito parecer intermitente.**
+
+**Emitir um token de mídia aposenta o anterior** (§43) — e isso mata a conexão
+aberta com o velho. Duas abas, um `StrictMode` que monta duas vezes, ou oito
+horas de sessão: qualquer um dos três derruba o barramento. Medido no
+contador instrumentado: `erros: 2, msgs: 0` no app enquanto um `EventSource`
+cru, aberto na mesma página com o token da vez, recebia tudo.
+
+O conserto dos dois é um só, e agora mora num lugar só: `api.ouvirEventos()`
+espera o token existir, reconecta com token novo quando a conexão cai, e desiste
+depois de cinco tentativas em intervalos crescentes. **Quatro telas escreviam as
+mesmas seis linhas** — App, mural, locadora e player —, e três delas com o mesmo
+defeito.
+
+### O aviso que chegava quando ninguém ouvia
+
+Outro achado da mesma investigação, e este é de desenho: o vigia marca
+`notified_at` e publica **uma vez**. Se naquele instante não havia aba aberta, o
+evento morre no ar e o lembrete nunca mais dispara.
+
+Não precisa de service worker pra melhorar: na abertura, o Odeon pergunta o que
+está agendado — rota que já existia — e recupera o que **começou há menos de
+quinze minutos e ainda está no ar**. Quem abre cinco minutos depois vê que
+começou; quem abre no dia seguinte não vê nada, que é o certo (§18).
+
+E o aviso recuperado diz *"já começou"*, não *"começando"*: são fatos
+diferentes, e trocar um pelo outro manda a pessoa correr pra pegar o início de
+um filme que já vai na metade.
+
+**O aviso só é marcado como lido quando sai da tela** — no clique ou no fim dos
+vinte segundos. Marcar ao enfileirar parece igual e não é: se a tela fechar
+antes de ele aparecer, fica lido sem ter sido visto. Foi exatamente assim que o
+defeito apareceu, num remount do modo estrito que engoliu o primeiro aviso — a
+mesma falha do `notified_at`, um andar acima.
+
+### O que mais faltava, e não era notificação
+
+**A rota dos agendamentos não tinha cliente.** `GET /api/live/reminders` existe
+desde a R17: dava pra agendar um programa e **não dava pra ver o que estava
+agendado**. É o §27 pela terceira vez nesta rodada. Agora há uma faixa "Você
+agendou" entre a sintonia e a linha do tempo, que some quando não há nada (§24).
+
+**E o que o navegador respondeu passou a ser dito.** Agendar com a permissão
+negada deixava o botão verde e a notificação nunca chegava — o produto mostrando
+sucesso pra um recurso que ele sabia que não ia entregar. Agora a tela diz qual
+dos três casos é: sem suporte, bloqueado no site, ou permissão não concedida. E
+não é erro: o agendamento funcionou, e o aviso dentro do Odeon continua vindo. O
+que mudou é o alcance.
+
+### Verificação
+
+Em Firefox headless, com uma espiã no lugar do `Notification` do navegador — ela
+não testa o navegador, testa se o Odeon **chama**, e com o quê:
+
+| | |
+|---|---|
+| a faixa "Você agendou" | três programas, com canal e `hoje 16:04` |
+| aviso recuperado na abertura | `● JÁ COMEÇOU · Uma Família da Pesada · Sessão Seriado` |
+| **aviso ao vivo** | `● COMEÇANDO · Zedin · Videoteca` |
+| **notificação do sistema** | `{"titulo":"Começando agora no Odeon","body":"Zedin · Videoteca","tag":"odeon-programa-9373"}` |
+
+E a reconexão, provada no cenário que matava tudo: com a página aberta, um token
+de mídia novo é emitido **do lado de fora** (aposentando o da conexão), e em
+seguida um evento é publicado. O app recarrega a biblioteca — de 1 pra 2
+requisições — porque recebeu o evento pela conexão refeita.
+
+**239 testes**, um novo: `/api/events` aceita token na query. Tirá-lo da lista
+mata o aviso, o mural ao vivo, o pedido de fita e a sincronia do player de uma
+vez só, **e sem nenhum erro em lugar nenhum** — que foi como ficou quebrado sem
+ninguém notar.
+
+Ficou também uma linha de log por conexão ao barramento. É barato, e é o que
+teria denunciado isto no primeiro dia.
+
+### O que isto NÃO fecha
+
+**Sem service worker, o aviso continua exigindo o Odeon aberto** — em segundo
+plano basta, com a aba fechada não. Era a decisão do §3.6 e ela continua de pé;
+o que mudou é que agora o caso que ela cobre funciona de verdade.
+
+**Os canais da casa não podem ser agendados.** `programme_reminder` aponta pra
+`programme`, que é a grade do IPTV; os canais do Odeon são calculados (§25) e não
+têm linha. Depois da R39 o bloco deles abre o cartaz da obra, que não sabe de
+horário. É o mesmo cidadão de segunda classe que a R39 encontrou, num outro
+lugar — e fechar isso é uma decisão de desenho, não um conserto.
+
+## 61. R45 — o rebobinar, e a dívida mais antiga em aberto
+
+> *"Animação vhs rebobinar"*
+
+O §46 já tinha anotado o que faltava, com todas as letras: *"hoje é um ponteiro
+regressivo e um carretel andando pra trás — falta o objeto girando, o ruído e o
+tranco no fim"*. Esta seção paga as três.
+
+### O objeto
+
+O que havia era **um anel de CSS girando ao contrário**. O que há agora é a
+janela de um VHS com os dois carretéis — os mesmos que a caixa já desenha na
+estante, na mesma linguagem, porque é a mesma fita.
+
+Três coisas que o anel não tinha, e cada uma diz algo que o anel não dizia:
+
+| | e por que importa |
+|---|---|
+| **os dois giram, em sentidos opostos** | é o que os carretéis de uma fita fazem: um entrega, o outro recolhe |
+| **a velocidade cai com o que falta** | a fita sai rápido e vai perdendo força — o ponteiro virando movimento |
+| **o rolo da esquerda engorda** | a fita voltando pro lugar de onde saiu, que é o que "rebobinar" quer dizer |
+
+**O giro não vem de `@keyframes`.** Uma animação de velocidade constante não
+sabe desacelerar junto com um número que veio do banco — então o ângulo é escrito
+como propriedade CSS a cada quadro, acumulado em vez de calculado do tempo (o
+disco daria um salto quando a velocidade mudasse). É a mesma decisão da agulha
+do "ao vivo" (§25): o React é acordado só quando o **segundo** muda, e não
+sessenta vezes por segundo pra mover dois discos.
+
+### O ruído
+
+Sintetizado, pela régua de zero bytes do §12 — a mesma que recusou CDN de fonte
+e que fez o menu de DVD sequenciar a trilha em vez de servir um `.ogg` (§47). Um
+sample de rebobinar custaria uns 100 KB e uma licença pra alguém conferir.
+
+E é historicamente correto pelo mesmo motivo que a trilha do menu era: o som de
+um VHS **não é uma gravação**, é um motor e um atrito. Três camadas, e cada uma
+é uma peça do aparelho:
+
+| camada | o que é no objeto |
+|---|---|
+| ruído branco por um passa-faixa | a fita raspando na cabeça e nas guias |
+| dente de serra grave | o motor puxando o carretel |
+| seno agudo, baixinho | o assobio da engrenagem em rotação alta |
+
+As três respondem à **mesma velocidade que gira os carretéis** — som e imagem
+contam a mesma coisa, e é isso que faz o conjunto convencer. O `Q` do filtro é
+baixo de propósito: passa-faixa estreito vira apito, e fita não apita, chia.
+
+### O tranco
+
+*"A parada seca com um pulo de um quadro."* Ele é metade imagem e metade som: a
+fita inteira recua 3px e volta, uma vez, em 160ms, enquanto o motor cai de tom
+e entra um baque grave curto — o mecanismo batendo no fim de curso.
+
+Sem o baque, o silêncio lê como o áudio tendo acabado, e não como a fita tendo
+chegado. Sem o pulo, o movimento simplesmente para — e **parar não é chegar**.
+
+### Duas coisas que a medição corrigiu
+
+**O objeto nasceu pequeno demais.** Na primeira medida a fita tinha 190px e os
+dentes ficavam com 12px: um disco girando pequeno demais é um disco parado. O
+screenshot mostrou dois pontos escuros. Foi pra 268px, com os dentes em contraste
+alto — são eles que provam a rotação.
+
+**E a variável mentia.** Ela se chamava `--cheio` e valia `1 - t`, ou seja: o
+nome dizia "quanto já voltou" e o valor era "quanto ainda falta". Virou
+`--restante`, que é o que ela é — o mesmo número do ponteiro, normalizado.
+
+### `prefers-reduced-motion`, e por que ele precisou de linha própria
+
+A regra global do CSS mata `animation` e `transition` — e **não alcança um
+ângulo escrito por JS**. Quem pediu menos movimento continuaria vendo dois discos
+girarem por até dez segundos. Agora eles ficam parados, e a espera — que é o
+conteúdo do gesto, e não o enfeite — continua igual. *"Alma não pode custar
+enjoo"* (§52).
+
+### Verificação
+
+Em Firefox headless, lendo as propriedades computadas quadro a quadro durante um
+rebobinar de verdade:
+
+| instante | `--giro-a` | `--giro-b` | `--restante` |
+|---|---|---|---|
+| +0,6s | **−113,8°** | **+72,8°** | 0,82 |
+| +1,1s | −147,3° | +94,3° | 0,67 |
+| +1,7s | −188,6° | +120,7° | 0,34 |
+| +2,2s | −213,6° | +136,7° | 0,02 |
+| +2,8s | −226,1° | +144,7° | **0** · `trancou` |
+
+Os sinais opostos são os sentidos opostos. O passo entre as amostras encolhe —
+de 41° para 12° — que é a velocidade caindo com o que falta. E o `--restante`
+indo a zero é o rolo trocando de lado.
+
+**239 testes** e typecheck limpo; nenhum teste novo, porque nada disto é regra —
+é desenho, e quem verifica desenho é o olho e o relógio.
+
+O gesto foi exercido com uma **conta descartável** (`r45teste`), que pegou uma
+fita emprestada, rebobinou e devolveu. A conta foi apagada em seguida e o
+empréstimo caiu com ela pelo `ON DELETE CASCADE` — **as duas fitas que estão no
+meio neste servidor continuam onde as pessoas as deixaram**, que é o dado que
+esta fase não podia tocar.
+
+## 62. R46 — assistir junto, e as três perguntas respondidas antes do código
+
+> *"Watch Party (Interação fácil entre amigos)"*
+
+O `IDEIAS-2.md` §4.6 decidiu o que é — **assistir junto de verdade sincronizado,
+mais conversa ao lado** — e respondeu as três perguntas do desenho antes de
+existir uma linha. Este módulo é a transcrição delas.
+
+### 1. Quem manda é o host
+
+Existe um dono da sessão, e é dele o controle. Isso resolve sozinho a briga de
+dois cliques simultâneos: **não há eleição, não há empate**, e o estado tem uma
+fonte só.
+
+Na tela do membro os controles **não ficam desabilitados — eles não existem**,
+com uma frase no lugar: *"quem manda é sam"*. Um controle apagado convida a
+tentar, e tentar aqui é levar um "não" que a tela já sabia (§53). E o servidor
+recusa de qualquer jeito: `{"error":"quem manda na sala é o host"}`.
+
+### 2. Quando um trava, todo mundo para
+
+*"Sempre sincronizado."* Não há modo tolerante: se a sessão é assistir junto,
+assistir separado por trinta segundos é a sessão tendo falhado em silêncio.
+
+A regra inteira cabe numa linha do servidor, e há teste que quebra se ela virar
+duas:
+
+```rust
+rodando: tocando && esperando.is_empty()
+```
+
+`tocando` é a **intenção** do host; `rodando` é o que toca. Cada tela avisa
+quando está carregando e quando voltou, e o servidor soma. **Ausente não
+segura** — quem sumiu há mais de dois minutos já não está na sessão, e esperar
+por uma aba fechada travaria a sala pra sempre.
+
+**A consequência foi dita antes de ser sentida** (§4.6): a conexão mais lenta
+manda no ritmo de todo mundo. Por isso a sala mostra **o nome de quem está
+segurando** — *"esperando r46teste carregar…"* —, e por isso a rota de expulsar
+existe desde o primeiro dia. O conserto não é afrouxar a sincronia; é uma
+decisão social.
+
+### 3. Os dois modos de stream, como opção da sessão
+
+`por_pessoa` é o padrão — é o que já funcionava sem código novo. O
+`compartilhado` guarda o `transcode_id` do host, e os membros leem a playlist
+dele: **a única coisa que esse modo custou** foi uma permissão estreita
+(`pode_ler_transcode`), válida só enquanto a sala está aberta, só pra quem está
+dentro, e só pra sessão que aquela sala declarou.
+
+### O transporte é o barramento, e o estado é a tabela
+
+*"Ele é o transporte, e não se inventa um segundo canal."* O evento diz apenas
+**qual sala mexeu**; o estado mora em `sessao_junta`. Quem entra atrasado lê e
+chega no ponto certo — o oposto do defeito que a R44 encontrou no aviso de
+programa, onde o evento publicado no vazio sumia pra sempre.
+
+E não há tabela de convite: **a amizade já é o aceite** (§44). Uma sala aberta
+aparece no mural de quem foi aceito, e de mais ninguém.
+
+### Três defeitos que esta fase encontrou — dois deles recém-criados
+
+**O `midia.clear()` da reconexão do barramento** (R44) aposentava o token que
+está dentro do `<video src=…?token=>`. O segundo participante recebia *"o
+navegador recusou o arquivo mesmo com plano de Direct Play"* — era o barramento
+derrubando o filme dele. A reconexão passou a usar o token que estiver valendo.
+
+**O `pronto` virou laço.** A rota devolve a sala; a sala trocava de identidade;
+o efeito rodava de novo e avisava outra vez. Uma fila infinita de
+`/api/junto/…/pronto`.
+
+**E quatro `EventSource` abertos** — App, aviso de programa, salas abertas e
+mural — comiam o orçamento de **seis conexões por host** do navegador. O sintoma
+foi o pior possível: no segundo participante, o `fetch` do plano de reprodução
+**ficava trinta segundos pendurado**, o vídeo nunca carregava, e a sala inteira
+esperava por ele. Agora é **uma conexão pro aplicativo inteiro** — que é o que o
+`events.rs` documentava desde o M3: *"o navegador já mantém UM `EventSource`
+aberto"*.
+
+### E o impasse que a própria regra criava
+
+A régua de "pronto" era `readyState >= 3`. Numa sala isso **trava sozinho**: a
+sala nasce parada, o vídeo de todo mundo começa pausado, e um vídeo pausado pode
+nunca passar de `HAVE_CURRENT_DATA` porque o navegador não vê motivo pra encher
+o buffer. Ninguém fica pronto, nada toca — e nada tocar é justamente o que
+impede de encher o buffer. O impasse se alimenta.
+
+A régua passou a ser `>= 2` — *tenho o quadro deste ponto* —, que é a promessa
+honesta pra sincronia, mais `preload="auto"` no elemento. Quem travar de verdade
+no meio avisa pelo `waiting`, que é o evento que existe pra isso.
+
+### Verificação
+
+Com duas contas de verdade e **um navegador de cada vez** — dois Firefox
+simultâneos lotam o `/tmp` da máquina, e não são necessários: cada metade da
+sincronia se prova sozinha.
+
+**Fase 1 — o host publica.** O navegador é o host:
+
+| | |
+|---|---|
+| depois do play | `tocando=true` · `rodando=true` · ninguém esperando |
+| depois da pausa | `tocando=false` · `rodando=false` · **posição 5,1s** |
+
+A posição em 5,1s é a prova de que o filme rodou de verdade entre um e outro.
+
+**Fase 2 — o membro obedece.** O navegador é o membro, e o host age só por HTTP:
+
+| | |
+|---|---|
+| o convite no mural | *"sam está assistindo junto · Drive · 1 pessoa"* |
+| ao entrar | `readyState 4`, sem controles, *"QUEM MANDA É SAM"* |
+| host manda **tocar** | o membro tocou em **~2s** (`pausado: false`, t=13,2) |
+| host manda **parar** | o membro parou em **~2s** (t=12) |
+| membro tentando mandar | `{"error":"quem manda na sala é o host"}` |
+
+A conversa foi provada antes, com as duas telas abertas: *"r46teste passa o
+pão"* escrito pelo membro apareceu na tela do host.
+
+**241 testes**, dois novos e os dois sobre a regra que não pode escorregar: que
+`rodando` exige todo mundo pronto, e que ausente não segura a sala.
+
+### Uma coisa que o teste ensinou sobre o produto
+
+Um navegador morrendo **publica a pausa**: a aba do host, ao fechar, pausa o
+vídeo, e o `onPause` do player manda `tocando=false`. No teste isso era ruído —
+e no produto é o comportamento certo: quem fechou a aba parou de assistir, e a
+sala saber disso é melhor do que a sala esperar por um fantasma.
+
+### O que NÃO está fechado
+
+**O modo compartilhado não foi exercido.** A permissão existe, a coluna existe e
+o host publica o `transcode_id` — mas neste acervo o arquivo testado é Direct
+Play, e sem transcode não há sessão pra compartilhar. Falta uma prova com um
+arquivo que exija transcode.
+
+**Não há reencontro depois de fechar a aba.** Quem fecha continua membro, e ao
+voltar cai na sala de novo — mas o filme dele reabre do ponto da sala, não de
+onde ele parou. É o certo pra sincronia e é uma escolha, não um esquecimento.

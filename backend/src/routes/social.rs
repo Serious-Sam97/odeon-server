@@ -72,6 +72,12 @@ pub struct Presente {
     /// Se é amigo seu. É o que separa as duas listas sem pedir duas consultas.
     pub amigo: bool,
     pub eu: bool,
+    /// R43 — o rosto escolhido, já como caminho de arte. `None` é quem não
+    /// escolheu, e a tela cai na marca derivada do nome (R42).
+    ///
+    /// Sai do banco como **chave** e é trocado pela arte antes de responder: o
+    /// catálogo é código (`enfeites.rs`), então SQL nenhum sabe traduzi-lo.
+    pub rosto: Option<String>,
 }
 
 /// Quem está aqui.
@@ -87,12 +93,14 @@ pub async fn presenca(
     let sql = format!(
         r#"
         SELECT u.id, u.display_name,
+               pf.avatar                    AS rosto,
                w.title                     AS assistindo,
                w.id                         AS work_id,
                w.artwork->>'poster'         AS poster,
                (u.id IN ({amigos}))         AS amigo,
                (u.id = $1)                  AS eu
         FROM app_user u
+        LEFT JOIN perfil pf ON pf.user_id = u.id
         JOIN LATERAL (
             SELECT max(s.last_seen_at) AS visto
             FROM auth_session s WHERE s.user_id = u.id
@@ -115,12 +123,18 @@ pub async fn presenca(
         amigos = crate::routes::amigos::IDS_DOS_MEUS_AMIGOS,
     );
 
-    Ok(Json(
-        sqlx::query_as::<_, Presente>(&sql)
-            .bind(user.id)
-            .fetch_all(&state.pool)
-            .await?,
-    ))
+    let mut lista = sqlx::query_as::<_, Presente>(&sql)
+        .bind(user.id)
+        .fetch_all(&state.pool)
+        .await?;
+
+    // A chave vira arte aqui, uma consulta pra lista inteira.
+    let arte = crate::enfeites::arte_por_chave(&state.pool).await;
+    for p in &mut lista {
+        p.rosto = p.rosto.as_deref().and_then(|c| arte.get(c).cloned());
+    }
+
+    Ok(Json(lista))
 }
 
 // ---------------------------------------------------------------------- busca

@@ -7,6 +7,7 @@ pub mod curation;
 pub mod curiosidades;
 pub mod feed;
 pub mod graph;
+pub mod junto;
 pub mod guia;
 pub mod live;
 pub mod locadora;
@@ -232,6 +233,18 @@ pub fn router(state: AppState) -> Router {
         // parte de consulta, atrás da revista.
         .route("/api/guia/revista", get(revista::revista))
         .route("/api/retrospectiva", get(retrospectiva::retrospectiva))
+        // --- R46: assistir junto ---
+        //
+        // O `junto` é uma sala, e as rotas dizem isso: criar, entrar, sair,
+        // mandar o estado (só o host), avisar que travou, e conversar.
+        .route("/api/junto", get(junto::atual).post(junto::criar))
+        .route("/api/junto/abertas", get(junto::abertas))
+        .route("/api/junto/{id}/entrar", post(junto::entrar))
+        .route("/api/junto/{id}/sair", post(junto::sair))
+        .route("/api/junto/{id}/estado", put(junto::estado))
+        .route("/api/junto/{id}/pronto", put(junto::pronto))
+        .route("/api/junto/{id}/recado", post(junto::recado))
+        .route("/api/junto/{id}/membro/{quem}", delete(junto::expulsar))
         // --- R32: o perfil, e o placar que ele substitui ---
         //
         // O §40 pôs o placar numa aba própria "pra ser reversível", e o efeito
@@ -423,8 +436,9 @@ async fn aquecer_producao(
     Ok(Json(json!({ "started": true, "job_id": id })))
 }
 
-/// Busca a saga de cada filme identificado. Mesmo molde do aquecimento de
-/// produção (§38): job, progresso visível, cancelamento e retomada pelo `WHERE`.
+/// Busca a saga de cada filme identificado, e conserta a arte das sagas que a
+/// R32 gravou com caminho remoto (R38). Mesmo molde do aquecimento de produção
+/// (§38): job, progresso visível, cancelamento e retomada pelo `WHERE`.
 async fn aquecer_sagas(
     State(state): State<AppState>,
     AdminUser(user): AdminUser,
@@ -448,7 +462,10 @@ async fn aquecer_sagas(
     let id = job.id;
     let pool = state.pool.clone();
     let providers = state.providers.clone();
-    tokio::spawn(async move { crate::metadata::saga::aquecer(pool, providers, Some(job)).await });
+    let artwork_dir = state.config.artwork_dir.clone();
+    tokio::spawn(
+        async move { crate::metadata::saga::aquecer(pool, providers, artwork_dir, Some(job)).await },
+    );
 
     Ok(Json(json!({ "started": true, "job_id": id })))
 }
@@ -575,6 +592,13 @@ async fn create_library(
 /// A identificação só começa se a varredura **terminou de verdade**. Depois de
 /// um cancelamento ou de uma falha, encadear seria identificar sobre um
 /// acervo pela metade.
+///
+/// **E as sagas vêm depois da identificação** (R40), pelo mesmo argumento: o
+/// pedido era *"como dou refresh nas coleções para pegar filmes novos?"*, e
+/// filme novo só vira alvo de saga depois de identificado — o alvo do job é
+/// `match_state IN ('auto','confirmed')` com id do TMDB. Encadear logo após a
+/// varredura acharia zero. Assim "achei filmes novos" e "as sagas deles
+/// apareceram" são um gesto só.
 async fn start_scan(
     State(state): State<AppState>,
     AdminUser(_): AdminUser,
@@ -640,6 +664,31 @@ async fn start_scan(
                 needs_review: m.needs_review,
             },
         );
+
+        // As sagas dos filmes recém-identificados (R40).
+        //
+        // Rodar de novo é barato e sempre seguro: o alvo é "filme sem
+        // franquia", então uma segunda passada custa as chamadas dos avulsos e
+        // mais nada — e desde a R38 a mesma rodada ainda conserta capa de saga
+        // que tenha ficado com caminho remoto.
+        //
+        // `Job::start` devolvendo `None` aqui é o caso normal de "já há um
+        // rodando", e não um erro: quem apertou o botão à mão ganha a rodada, e
+        // o encadeamento não precisa de uma segunda.
+        if let Some(job_saga) =
+            crate::jobs::Job::start(&depois.pool, "saga", json!({ "chained": true }), None).await
+        {
+            tracing::info!("identificação concluída — sagas encadeadas");
+            crate::metadata::saga::aquecer(
+                depois.pool.clone(),
+                depois.providers.clone(),
+                depois.config.artwork_dir.clone(),
+                Some(job_saga),
+            )
+            .await;
+        } else {
+            tracing::info!("sagas não encadeadas — já havia uma rodada em andamento");
+        }
     });
 
     Ok(Json(json!({
@@ -757,4 +806,32 @@ async fn scan_status(State(state): State<AppState>) -> Json<scanner::ScanStatus>
         }
     }
     Json(current)
+}
+
+#[cfg(test)]
+mod tests {
+    /// **As sagas vêm depois da identificação, e não depois da varredura.**
+    ///
+    /// O alvo do job de saga é filme com `match_state IN ('auto','confirmed')`
+    /// e id do TMDB. Encadeá-lo logo após o `scan_all` acharia zero filme novo,
+    /// porque nenhum deles foi identificado ainda — e o defeito seria invisível:
+    /// o job rodaria, terminaria bem e não faria nada.
+    #[test]
+    fn a_saga_e_encadeada_depois_do_match() {
+        let fonte = include_str!("mod.rs");
+        let corrente = fonte
+            .split_once("async fn start_scan")
+            .expect("start_scan sumiu")
+            .1;
+        let pos_match = corrente
+            .find("run_matching")
+            .expect("a identificação não é mais encadeada");
+        let pos_saga = corrente
+            .find("saga::aquecer")
+            .expect("as sagas não são mais encadeadas");
+        assert!(
+            pos_match < pos_saga,
+            "as sagas passaram a ser encadeadas antes da identificação"
+        );
+    }
 }

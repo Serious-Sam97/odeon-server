@@ -66,6 +66,8 @@ pub struct Alguem {
     pub id: Uuid,
     pub username: String,
     pub display_name: String,
+    /// R43 — o rosto escolhido, já como arte. Ver `social::Presente`.
+    pub rosto: Option<String>,
     /// Desde quando somos amigos, ou desde quando o pedido está parado.
     pub desde: chrono::DateTime<chrono::Utc>,
 }
@@ -92,6 +94,7 @@ struct Linha {
     id: Uuid,
     username: String,
     display_name: String,
+    rosto: Option<String>,
     /// `amigo` | `enviado` | `recebido` | `nenhuma`.
     relacao: String,
     desde: chrono::DateTime<chrono::Utc>,
@@ -109,7 +112,7 @@ pub async fn listar(
 ) -> AppResult<Json<MinhasAmizades>> {
     let linhas: Vec<Linha> = sqlx::query_as(
         r#"
-        SELECT u.id, u.username, u.display_name,
+        SELECT u.id, u.username, u.display_name, pf.avatar AS rosto,
                CASE
                    WHEN am.aceito_em IS NOT NULL      THEN 'amigo'
                    WHEN am.pedido_por = $1            THEN 'enviado'
@@ -118,6 +121,7 @@ pub async fn listar(
                END                                            AS relacao,
                COALESCE(am.aceito_em, am.pedido_em, u.created_at) AS desde
         FROM app_user u
+        LEFT JOIN perfil pf ON pf.user_id = u.id
         LEFT JOIN amizade am
           ON am.a = least(u.id, $1) AND am.b = greatest(u.id, $1)
         -- Você não aparece na sua própria lista, e conta desativada não aparece
@@ -137,11 +141,16 @@ pub async fn listar(
         no_servidor: Vec::new(),
     };
 
+    // A chave do rosto vira arte aqui: o catálogo é código, e SQL nenhum sabe
+    // traduzi-lo (R43).
+    let arte = crate::enfeites::arte_por_chave(&state.pool).await;
+
     for l in linhas {
         let quem = Alguem {
             id: l.id,
             username: l.username,
             display_name: l.display_name,
+            rosto: l.rosto.as_deref().and_then(|c| arte.get(c).cloned()),
             desde: l.desde,
         };
         match l.relacao.as_str() {
