@@ -5985,3 +5985,229 @@ e **não há CI** — 229 testes que ninguém roda automaticamente.
 *(A chave do Groq, que faltava quando isto foi escrito, chegou logo depois. O que
 aconteceu quando ela chegou está no §50, e a lição vale mais que a feature: um
 modelo que recebe três colunas escreve sobre três colunas.)*
+
+## 52. R36 — a barra de cima, e o estacionamento que virou endereço
+
+Esta seção não veio das onze anotações. Veio de *"nosso menu superior tá bem
+feio"*, com autorização explícita pra ser experimental — e com uma frase que
+resolveu metade do problema antes de eu escrever qualquer coisa:
+
+> *"as coisas experimentais não precisam ficar pra sempre no experimental; se
+> terminamos já tá de boa pra tirar e colocar no seu lugar."*
+
+### O defeito era de arquitetura, não de estilo
+
+A barra tinha **nove entradas em fileira**, mais **quatro salas escondidas**
+dentro de uma delas chamada "experimentação". E as nove misturavam três coisas
+diferentes com o mesmo peso visual:
+
+| tipo | entradas |
+|---|---|
+| acervo | biblioteca, coleções |
+| produto | para você, experimentação, mural, ao vivo |
+| **manutenção** | revisão, pastas, admin |
+
+É **exatamente** o defeito que o §12 corrigiu quando tirou as operações de
+servidor daqui — *"misturadas, elas competiam com as abas, e a mais gritante da
+tela era `identificar`"*. Seis fases depois ele tinha voltado por outro caminho:
+ninguém acrescentou uma operação à barra, mas acrescentou três telas de
+manutenção, uma por vez, e cada uma parecia inofensiva sozinha.
+
+**E "experimentação" era um estacionamento.** A palavra não descreve nada; ela
+existia porque a locadora, o guia, a retrospectiva e o perfil estavam sendo
+construídos. Estão prontos há sete fases — e uma feature pronta atrás de uma
+palavra que não a descreve é uma feature que ninguém acha.
+
+### O que ficou
+
+Dois lados, e a divisão é a do §12 aplicada de novo: **navegação de um lado,
+ferramenta do outro.**
+
+À esquerda, **sete entradas, todas do mesmo tipo** — lugares do acervo: para
+você · biblioteca · coleções · locadora · guia · ao vivo · mural. À direita, o
+que não é acervo: a manutenção atrás de um ícone de controles, e você atrás do
+seu próprio nome.
+
+A retrospectiva foi pro **perfil**, que era o destino que o `IDEIAS.md` §4 já
+tinha previsto pra ela: *"pode sobreviver como tela de perfil"*. Faz mais
+sentido lá — ela descreve quem você é, que é literalmente o assunto daquela
+tela.
+
+### Os efeitos, e o que cada um responde
+
+Nenhum é enfeite solto. Cada um responde uma pergunta que a barra antiga deixava
+a tela responder sozinha:
+
+| efeito | o que ele diz |
+|---|---|
+| o traço que **desliza** entre as abas | de onde você veio, não só onde está |
+| o **holofote** que segue o mouse | onde o dedo está, numa fileira de sete alvos pequenos |
+| a barra que **condensa** ao rolar | você saiu do topo; o conteúdo é que importa agora |
+| o **anel** em volta do seu nome | quanto falta pro próximo nível, sem abrir o perfil |
+| a marca que **pulsa** | tem trabalho rodando no servidor |
+| o conteúdo que **entra subindo** | a aba trocou; não foi falha de carregamento |
+
+**O traço mora fora dos botões**, e isso é a diferença inteira: uma borda por
+botão não desliza de um pro outro — ela aparece num e some do outro, que é o que
+a barra fazia antes. Posição e largura vêm do DOM, medidas: os rótulos têm
+tamanhos diferentes e a fonte é do sistema, então a única fonte de verdade sobre
+onde a aba está é a própria aba.
+
+**O anel é a fase 5 aparecendo onde ela é útil.** Um `conic-gradient` até a
+fatia do nível, e ele entra girando de zero na carga — um arco que já nasce
+cheio não é lido como progresso, é lido como enfeite.
+
+Tudo isso desliga em `prefers-reduced-motion`. Alma não pode custar enjoo a quem
+pediu pra não ter movimento.
+
+### Duas coisas que o screenshot corrigiu
+
+**O `⚙` do sistema é emoji, e emoji vem colorido** — um ícone azul e vermelho no
+meio de uma barra âmbar e cinza. Redesenhei em SVG como engrenagem de quatro
+dentes, e a 16px ele lia como **estrela**. A terceira versão são três trilhos com
+um botão cada: diz "ajustes" em qualquer tamanho, e os botões deslizam no hover,
+que é o gesto do próprio ícone.
+
+**O vidro deixava os pôsteres atravessarem.** Condensada, a barra passa por cima
+da vitrine da locadora — oito capas — e a 92% de opacidade o rótulo da aba
+competia com uma delas. Foi pra 97% com mais desfoque. Nenhum dos dois apareceu
+lendo o código.
+
+### E um defeito que a transição de aba causou
+
+A entrada do conteúdo subia com `transform: translateY(8px)` e
+`animation-fill-mode: both`. Passou no typecheck, nas sete abas do teste de
+fumaça e em quatro screenshots. **E quebrou todo overlay de dentro do `main`** —
+a caixa da locadora voando pro centro, o menu de DVD, a tela da fita.
+
+O motivo é uma linha do CSS que quase nunca importa:
+
+> **qualquer `transform` diferente de `none` faz o elemento virar bloco de
+> contenção para os `position: fixed` descendentes.**
+
+E `fill-mode: both` deixa a animação preenchendo pra sempre. O valor final é a
+matriz identidade — `matrix(1,0,0,1,0,0)` —, que não é `none`. O `<main>` virou
+a referência de posicionamento de tudo que era fixo dentro dele, **em
+definitivo**, e ninguém notaria olhando o CSS: o valor é visualmente nulo.
+
+Medido no navegador depois do relato: `.mao-fundo`, que é `fixed; inset: 0`,
+devolvia `{y: -277, h: 3907}` — o tamanho da página inteira — e a caixa pousava
+em `y = 1326` numa viewport de 814. Ela ia pro foco e saía de vista, que foi
+exatamente a frase do relato.
+
+O conserto é `position: relative` + `top`, que dá o mesmo movimento e **não**
+cria bloco de contenção pra `fixed`. Custa um reflow de 8px num elemento; em
+troca é seguro por construção em vez de seguro por 280 milissegundos.
+
+**A lição é sobre o teste, não sobre o CSS.** Eu cliquei as sete abas e li o
+texto de cada tela — e as sete estavam certas. O que quebrou foi um overlay que
+só existe depois de um segundo clique, dentro de uma delas. Um teste de fumaça
+que só confirma que a tela abriu não cobre o que a tela abre.
+
+### Verificação
+
+| | |
+|---|---|
+| as sete abas | clicadas uma a uma: **todas abrem, nenhum erro**, e o traço acompanha |
+| a caixa da locadora | voa pro centro e **fica**: `.mao-fundo` casa com a viewport, a caixa pousa em `y = 57` de 814 |
+| o menu de DVD | `[0, 0, 1428, 914]` contra viewport `[1440, 914]` — o outro overlay que o defeito derrubava |
+| perfil | atrás do menu do usuário, com a retrospectiva dentro |
+| gavetas | manutenção e você abrem, fecham no Escape e ao clicar fora |
+| estar numa tela de dentro | acende a borda do botão — sem isso a barra ficava sem nada marcado |
+| condensada | conferida por screenshot em cima da vitrine, que é o pior fundo que existe |
+| typecheck | `tsc --noEmit` limpo |
+
+## 53. R37 — a auditoria de permissão, e o buraco que tinha gente dentro
+
+Esta seção veio de uma linha de quem decide, escrita em caixa alta:
+
+> *"Verificar se usuário normal tem acesso a qualquer configuração do servidor,
+> **PRINCIPALMENTE usuário normal não pode apagar nem modificar nada**."*
+
+### O que a auditoria encontrou
+
+Há um `require_auth` global desde o §9b, e ele faz o que promete: valida a
+sessão. **Ele não olha papel** — nunca prometeu isso. Quem separa `admin` de
+`user` é o extrator `AdminUser`, aplicado handler a handler.
+
+Contadas: **25 rotas de escrita com `AdminUser` e 51 sem**. A maioria das 51 é
+legítima — progresso, nota, empréstimo, post, comentário, mensagem, amizade,
+perfil, desafio são todas do próprio usuário. Sobraram estas, sondadas com o
+token do `rudney` (`role = user`) e UUIDs inexistentes, pra não tocar em nada:
+
+| rota | antes | devia ser |
+|---|---|---|
+| `PATCH /api/collections/{id}` | 404 | 403 |
+| `DELETE /api/collections/{id}/items/{work}` | **200** | 403 |
+| `PUT /api/collections/{id}/order` | 200 | 403 |
+| `POST /api/works/{id}/tags` | 500 | 403 |
+| `DELETE /api/works/{id}/tags/{tag}` | **200** | 403 |
+| `POST /api/works/{id}/relations` | 422 | 403 |
+| `DELETE /api/works/{id}/relations/…` | 200 | 403 |
+
+404, 200 e 422 significam a mesma coisa: **a autorização deixou passar** e o
+pedido chegou no handler. Os dois 200 são deleções que **executaram** — não
+apagaram nada só porque o alvo não existia.
+
+**E o buraco tinha gente dentro.** No meio da auditoria apareceu uma terceira
+conta neste servidor — `gabriel`, `role = user`, criada às 15:54, vinte minutos
+antes do relato. Deixou de ser hipotético.
+
+### A regra: origem, não papel — e não é a mesma pra tudo
+
+Coleção é **duas coisas diferentes** com a mesma tabela:
+
+| | quem pode | por quê |
+|---|---|---|
+| `origin = 'provider'` (as **709** deste servidor) | ninguém edita à mão | é acervo: série, temporada e as 133 sagas da R32 |
+| `origin = 'manual'` ("suas ordens", §17) | qualquer morador | a ordem Machete é uma **opinião**, e opinião é de quem tem |
+
+Exigir administrador pra criar uma ordem de exibição mataria a feature. Então a
+linha divisória é a **origem**, não o papel — e `create_collection` já gravava
+`'manual'` fixo desde o §17, então ninguém cria uma `provider` por essa porta.
+
+`delete_collection` **já conferia isso**, e conferia bem. As outras quatro rotas
+que mexem numa coleção — renomear, acrescentar, tirar e reordenar — não
+conferiam nada. A checagem virou uma função (`so_manual`) usada pelas cinco: a
+regra existia num lugar e faltava em quatro, que é como uma regra some.
+
+**Tag e relação são outra história**, e essas viraram de administrador. A
+diferença é de dono: uma ordem de exibição é sua; uma tag na obra e um "corte do
+diretor de" mudam o que **todo mundo** vê — e a curadoria (§8f) e o guia leem
+`work_tag` como verdade sobre o acervo.
+
+### A tela parou de oferecer o que o servidor recusa
+
+O botão `✎ editar` da ficha abria "edição do grafo" — tag, coleção e relação —
+**para qualquer conta**. Agora ele não nasce pra quem não é administrador.
+
+Deixar o botão aparecendo pra quem vai levar 403 é o produto mentindo pra si
+mesmo. É a mesma regra que o perfil (§48) já seguia ao só listar os títulos que
+a pessoa desbloqueou: *a tela nunca oferece o que a validação vai recusar*.
+
+### Verificação
+
+Sondas com os dois papéis, e o contraste é a prova:
+
+| rota | rudney | sam (admin) |
+|---|---|---|
+| `PATCH` / `DELETE` a coleção do Harry Potter | **403** | 403 · *provider é intocável pros dois* |
+| `DELETE` item da coleção · `PUT` ordem | **403** | 403 |
+| `POST` / `DELETE` tag | **403** | passa |
+| `POST` / `DELETE` relação | **403** | passa |
+| `POST` criar coleção ("suas ordens") | 200 | 200 · e nasce `manual` |
+
+Acervo conferido depois: **709 coleções, 8.725 itens, 21.923 tags** — os mesmos
+números de antes. As duas coleções `__sonda__` criadas no teste foram apagadas.
+
+### O que isto NÃO fecha, e fica dito
+
+**Coleção `manual` não tem dono.** Não há coluna de autor, então uma ordem de
+exibição criada pelo `rudney` pode ser apagada pelo `gabriel`. Hoje isso é
+teórico — existem **zero** coleções `manual` no servidor —, e fechar exige uma
+migração e uma decisão sobre o que fazer com as órfãs. É planejamento, não
+conserto de emergência.
+
+**E `attach_tag` devolve 500 pra obra inexistente**, onde devia ser 404. É a
+mesma família do §8b — errar com o código errado é a versão barulhenta de errar
+em silêncio. Não é buraco de segurança; é aspereza, e fica anotada.

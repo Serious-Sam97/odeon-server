@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use uuid::Uuid;
 
-use crate::auth::AuthUser;
+use crate::auth::{AdminUser, AuthUser};
 use crate::error::{AppError, AppResult};
 use crate::models::{
     AddItem, AttachTag, CollectionNode, CollectionRow, NewCollection, NewRelation, RelationRow,
@@ -95,8 +95,18 @@ pub async fn work_tags(
     Ok(Json(tags_of(&state, work_id).await?))
 }
 
+/// Tag e relação são **metadado do acervo**, e por isso são de administrador.
+///
+/// A diferença com a coleção é de dono: uma ordem de exibição `manual` é sua —
+/// a ordem Machete é uma opinião, e opinião é de quem tem. Uma tag na obra e um
+/// "corte do diretor de" mudam o que **todo mundo** vê, inclusive a curadoria
+/// (§8f) e o guia, que leem `work_tag` como verdade sobre o acervo.
+///
+/// Estavam sem guarda nenhuma: qualquer conta autenticada — inclusive um
+/// `guest` — podia etiquetar e desetiquetar qualquer obra.
 pub async fn attach_tag(
     State(state): State<AppState>,
+    AdminUser(_): AdminUser,
     Path(work_id): Path<Uuid>,
     Json(body): Json<AttachTag>,
 ) -> AppResult<Json<Vec<WorkTag>>> {
@@ -131,6 +141,7 @@ pub async fn attach_tag(
 
 pub async fn detach_tag(
     State(state): State<AppState>,
+    AdminUser(_): AdminUser,
     Path((work_id, tag_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<Json<Vec<WorkTag>>> {
     sqlx::query("DELETE FROM work_tag WHERE work_id = $1 AND tag_id = $2")
@@ -293,6 +304,42 @@ pub async fn collection_detail(
     })))
 }
 
+/// Uma coleção que **não veio do provider**, ou o erro certo.
+///
+/// ## O furo que isto fecha
+///
+/// `delete_collection` já conferia a origem desde o §17 — e conferia bem. As
+/// outras quatro rotas que mexem numa coleção, não: renomear, acrescentar obra,
+/// tirar obra e reordenar aceitavam qualquer coleção de qualquer conta
+/// autenticada.
+///
+/// Medido antes de consertar: as **709 coleções deste servidor são `provider`**
+/// — série, temporada e as 133 sagas da R32. Ou seja, todas elas. Um morador
+/// comum podia renomear "Harry Potter: Coleção" ou tirar um filme de dentro
+/// dela, e o único motivo de nunca ter acontecido é ninguém ter tentado.
+///
+/// ## Por que origem, e não papel
+///
+/// Porque coleção é **as duas coisas**: as do provider são acervo, e as
+/// `manual` são a feature de "suas ordens" (§17) — a ordem Machete é do
+/// usuário, e exigir administrador pra criar uma mataria a feature.
+///
+/// `create_collection` já grava `'manual'` fixo, então ninguém cria uma
+/// `provider` por aqui. A origem é a linha divisória certa.
+async fn so_manual(state: &AppState, id: Uuid) -> AppResult<()> {
+    let origin: Option<String> = sqlx::query_scalar("SELECT origin FROM collection WHERE id = $1")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await?;
+    match origin.as_deref() {
+        None => Err(AppError::NotFound),
+        Some("provider") => Err(AppError::Forbidden(
+            "esta coleção veio do provider — refaça a identificação em vez de editar".into(),
+        )),
+        _ => Ok(()),
+    }
+}
+
 pub async fn create_collection(
     State(state): State<AppState>,
     Json(body): Json<NewCollection>,
@@ -321,6 +368,8 @@ pub async fn update_collection(
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateCollection>,
 ) -> AppResult<Json<CollectionRow>> {
+    so_manual(&state, id).await?;
+
     sqlx::query(
         "UPDATE collection SET
             title       = COALESCE($2, title),
@@ -342,21 +391,9 @@ pub async fn delete_collection(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Value>> {
-    // Série e temporada vieram do provider; apagar na mão só desincroniza.
-    let origin: Option<String> = sqlx::query_scalar("SELECT origin FROM collection WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.pool)
-        .await?;
-
-    match origin.as_deref() {
-        None => return Err(AppError::NotFound),
-        Some("provider") => {
-            return Err(AppError::BadRequest(
-                "esta coleção veio do provider — refaça a identificação em vez de apagar".into(),
-            ))
-        }
-        _ => {}
-    }
+    // Série e temporada vieram do provider; apagar na mão só desincroniza. A
+    // regra é a mesma das outras quatro rotas desde a R37, e mora num lugar só.
+    so_manual(&state, id).await?;
 
     sqlx::query("DELETE FROM collection WHERE id = $1")
         .bind(id)
@@ -370,6 +407,8 @@ pub async fn add_item(
     Path(id): Path<Uuid>,
     Json(body): Json<AddItem>,
 ) -> AppResult<Json<Value>> {
+    so_manual(&state, id).await?;
+
     // Sem posição explícita, entra no fim da fila.
     let position = match body.position {
         Some(p) => p,
@@ -400,6 +439,8 @@ pub async fn remove_item(
     State(state): State<AppState>,
     Path((id, work_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<Json<Value>> {
+    so_manual(&state, id).await?;
+
     sqlx::query("DELETE FROM collection_item WHERE collection_id = $1 AND work_id = $2")
         .bind(id)
         .bind(work_id)
@@ -415,6 +456,8 @@ pub async fn reorder(
     Path(id): Path<Uuid>,
     Json(body): Json<ReorderItems>,
 ) -> AppResult<Json<Value>> {
+    so_manual(&state, id).await?;
+
     let mut tx = state.pool.begin().await?;
     for entry in &body.items {
         sqlx::query(
@@ -493,6 +536,7 @@ pub async fn relations_of(state: &AppState, work_id: Uuid) -> AppResult<Vec<Rela
 
 pub async fn create_relation(
     State(state): State<AppState>,
+    AdminUser(_): AdminUser,
     Path(work_id): Path<Uuid>,
     Json(body): Json<NewRelation>,
 ) -> AppResult<Json<Vec<RelationRow>>> {
@@ -526,6 +570,7 @@ pub async fn create_relation(
 
 pub async fn delete_relation(
     State(state): State<AppState>,
+    AdminUser(_): AdminUser,
     Path((work_id, other, kind)): Path<(Uuid, Uuid, String)>,
 ) -> AppResult<Json<Vec<RelationRow>>> {
     sqlx::query(
