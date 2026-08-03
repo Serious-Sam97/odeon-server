@@ -43,6 +43,14 @@ pub struct TasteProfile {
     #[serde(skip)]
     pub taste_vector: Option<Vec<f32>>,
     pub has_taste_vector: bool,
+    /// Quantas obras você **avaliou**, e a média — separado de tudo acima.
+    ///
+    /// O §4.6 exigiu que o perfil inspecionável mostrasse comportamento e
+    /// declaração **em campos distintos**. Misturados, não daria pra responder
+    /// "o Odeon está me recomendando por causa do que eu vi ou do que eu disse
+    /// que gostei?" — e essa pergunta é a razão de o perfil ser inspecionável.
+    pub avaliadas: usize,
+    pub nota_media: Option<f32>,
 }
 
 impl TasteProfile {
@@ -77,6 +85,34 @@ pub struct PersonAffinity {
 /// Uma obra só não é evidência. Duas já dizem alguma coisa.
 const MIN_WORKS_FOR_PERSON: i64 = 2;
 
+/// Quanto uma nota declarada pode mexer na afinidade — **o número que define a
+/// R23** (§39).
+///
+/// O §4.6 do `IDEIAS.md` deixou a regra e ela é dura: *sinal fraco não manda no
+/// forte*. Este módulo inteiro nasceu de "nada é declarado" e "terminar >
+/// assistir", porque nota é enviesada — as pessoas dão 5 estrelas pro que acham
+/// que **deveriam** gostar, e 1 estrela por raiva do final.
+///
+/// 0,3 não é um número escolhido pelo gosto: ele é **o maior valor que não
+/// inverte nada** na escala que já existia aqui.
+///
+/// ```text
+/// terminou  1.0  +  nota 1 (−0,3)  =  0,7   → continua positivo
+/// largou   −0.8  +  nota 5 (+0,3)  = −0,5   → continua negativo
+/// ```
+///
+/// Ou seja: a nota move a obra dentro da faixa que o comportamento já
+/// determinou, e não atravessa o zero. Dar cinco estrelas pro que você
+/// abandonou aos oito minutos não convence o Odeon de que você gostou — e é
+/// exatamente isso que a regra existe pra garantir. Um teste trava isto.
+const PESO_DA_NOTA: f64 = 0.3;
+
+/// A nota, de 1 a 5, virada em ajuste de −PESO a +PESO. Três é o meio e vale
+/// zero: "achei ok" não é informação a favor nem contra.
+fn ajuste_da_nota(nota: i32) -> f64 {
+    (nota.clamp(1, 5) - 3) as f64 * (PESO_DA_NOTA / 2.0)
+}
+
 #[derive(Debug, sqlx::FromRow)]
 struct WorkSignal {
     work_id: Uuid,
@@ -87,9 +123,17 @@ struct WorkSignal {
     play_count: Option<i32>,
     duration_seconds: Option<f64>,
     embedding: Option<String>,
+    /// A nota declarada, quando existe (R23).
+    ///
+    /// Ela só chega aqui **junto de um sinal de comportamento**, porque a
+    /// consulta parte do `play_event`. Avaliar um filme que você nunca abriu
+    /// não cria gosto nenhum — o que é a mesma tese do módulo, aplicada ao
+    /// sinal novo: a nota qualifica o que você assistiu, ela não substitui o
+    /// assistir.
+    nota: Option<i32>,
 }
 
-/// Quanto esta obra conta como "gostei", de -1 a +1.4.
+/// Quanto esta obra conta como "gostei", de -1.1 a +1.7.
 fn affinity_of(signal: &WorkSignal) -> f32 {
     let ratio = signal.max_ratio.unwrap_or(0.0);
 
@@ -111,7 +155,10 @@ fn affinity_of(signal: &WorkSignal) -> f32 {
         _ => 0.4,
     };
 
-    (base + rewatch_bonus) as f32
+    // A nota entra por último e limitada — ver `PESO_DA_NOTA`.
+    let nota = signal.nota.map(ajuste_da_nota).unwrap_or(0.0);
+
+    (base + rewatch_bonus + nota) as f32
 }
 
 /// Decaimento exponencial por recência.
@@ -131,11 +178,16 @@ pub async fn build(pool: &PgPool, user_id: Uuid) -> anyhow::Result<TasteProfile>
             max(pe.created_at) AS last_seen,
             max(ps.play_count) AS play_count,
             max(pe.duration_seconds) AS duration_seconds,
-            max(w.embedding::text) AS embedding
+            max(w.embedding::text) AS embedding,
+            max(av.nota) AS nota
         FROM play_event pe
         JOIN work w ON w.id = pe.work_id
         LEFT JOIN playback_state ps
                ON ps.work_id = pe.work_id AND ps.user_id = pe.user_id
+        -- R23: a nota, quando existe. `LEFT JOIN` porque avaliar é opcional e
+        -- sempre será — a curadoria não pode depender de ninguém declarar nada.
+        LEFT JOIN avaliacao av
+               ON av.work_id = pe.work_id AND av.user_id = pe.user_id
         WHERE pe.user_id = $1
         GROUP BY pe.work_id
         "#,
@@ -148,11 +200,17 @@ pub async fn build(pool: &PgPool, user_id: Uuid) -> anyhow::Result<TasteProfile>
 
     let mut finished = 0usize;
     let mut abandoned = 0usize;
+    let mut avaliadas = 0usize;
+    let mut soma_notas = 0i32;
     let mut liked_vectors: Vec<(Vec<f32>, f32)> = Vec::new();
     let mut work_weights: HashMap<Uuid, f32> = HashMap::new();
     let mut finished_durations: Vec<i32> = Vec::new();
 
     for signal in &signals {
+        if let Some(n) = signal.nota {
+            avaliadas += 1;
+            soma_notas += n;
+        }
         let affinity = affinity_of(signal);
         let weight = affinity * recency_weight(signal.last_seen, now);
         work_weights.insert(signal.work_id, weight);
@@ -292,6 +350,8 @@ pub async fn build(pool: &PgPool, user_id: Uuid) -> anyhow::Result<TasteProfile>
         hour_histogram,
         has_taste_vector: taste_vector.is_some(),
         taste_vector,
+        avaliadas,
+        nota_media: (avaliadas > 0).then(|| soma_notas as f32 / avaliadas as f32),
     })
 }
 
@@ -319,6 +379,9 @@ mod tests {
             play_count: Some(plays),
             duration_seconds: Some(3600.0),
             embedding: None,
+            // Sem nota: os testes de comportamento medem comportamento, e o
+            // sinal da R23 tem os seus, logo abaixo.
+            nota: None,
         }
     }
 
@@ -356,5 +419,82 @@ mod tests {
         assert!(parse_pg_vector("[1,2,3]").is_none());
         let full = format!("[{}]", vec!["0.1"; embedding::DIMENSIONS].join(","));
         assert!(parse_pg_vector(&full).is_some());
+    }
+}
+
+#[cfg(test)]
+mod tests_da_nota {
+    use super::*;
+
+    fn sinal(ratio: f64, finishes: i64, starts: i64, nota: Option<i32>) -> WorkSignal {
+        WorkSignal {
+            work_id: Uuid::nil(),
+            max_ratio: Some(ratio),
+            finishes,
+            starts,
+            last_seen: Utc::now(),
+            play_count: Some(1),
+            duration_seconds: Some(6000.0),
+            embedding: None,
+            nota,
+        }
+    }
+
+    /// **A invariante da R23** (§39), e a razão de `PESO_DA_NOTA` valer 0,3.
+    ///
+    /// O §4.6 do `IDEIAS.md` deixou a regra: sinal fraco não manda no forte. Um
+    /// peso maior que 0,3 quebraria isto em silêncio — a curadoria continuaria
+    /// respondendo, só que errado, e ninguém notaria até o `/for-you` começar a
+    /// recomendar o que a pessoa abandonou.
+    #[test]
+    fn a_nota_ajusta_mas_nunca_inverte() {
+        // Cinco estrelas no que foi abandonado aos 8 minutos continua rejeição.
+        let odiado_mas_nota_5 = affinity_of(&sinal(0.05, 0, 1, Some(5)));
+        assert!(
+            odiado_mas_nota_5 < 0.0,
+            "cinco estrelas converteram um abandono em gosto: {odiado_mas_nota_5}"
+        );
+
+        // Uma estrela no que foi terminado continua contando como visto até o
+        // fim — porque terminar é comportamento, e comportamento manda.
+        let terminado_mas_nota_1 = affinity_of(&sinal(1.0, 1, 1, Some(1)));
+        assert!(
+            terminado_mas_nota_1 > 0.0,
+            "uma estrela apagou um filme terminado: {terminado_mas_nota_1}"
+        );
+    }
+
+    /// A nota move alguma coisa — senão ela seria enfeite, e a fase não teria
+    /// acontecido. O que ela move é o **lugar dentro da faixa**, não o sinal.
+    #[test]
+    fn a_nota_move_dentro_da_faixa() {
+        let sem = affinity_of(&sinal(1.0, 1, 1, None));
+        let cinco = affinity_of(&sinal(1.0, 1, 1, Some(5)));
+        let um = affinity_of(&sinal(1.0, 1, 1, Some(1)));
+        assert!(cinco > sem, "cinco estrelas não somaram nada");
+        assert!(um < sem, "uma estrela não subtraiu nada");
+        assert!((cinco - um - 2.0 * PESO_DA_NOTA as f32).abs() < 1e-5);
+    }
+
+    /// Três é o meio e vale zero. "Achei ok" não é informação a favor nem
+    /// contra, e tratá-lo como qualquer uma das duas seria inventar opinião.
+    #[test]
+    fn tres_estrelas_nao_dizem_nada() {
+        assert_eq!(ajuste_da_nota(3), 0.0);
+        assert_eq!(
+            affinity_of(&sinal(1.0, 1, 1, Some(3))),
+            affinity_of(&sinal(1.0, 1, 1, None))
+        );
+    }
+
+    /// O ajuste é simétrico e limitado ao peso — se um dia alguém mexer na
+    /// escala pra 1..10 sem mexer no divisor, este teste cai.
+    #[test]
+    fn o_ajuste_respeita_o_peso() {
+        assert_eq!(ajuste_da_nota(1), -PESO_DA_NOTA);
+        assert_eq!(ajuste_da_nota(5), PESO_DA_NOTA);
+        // Nota fora da faixa é grampeada, não amplificada.
+        assert_eq!(ajuste_da_nota(99), PESO_DA_NOTA);
+        assert_eq!(ajuste_da_nota(-4), -PESO_DA_NOTA);
     }
 }

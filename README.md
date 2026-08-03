@@ -242,6 +242,8 @@ HTTPS é opcional e desligado por padrão (ver abaixo).
 | **R6** | Canais ao vivo | ✅ IPTV via M3U + XMLTV, guia com grade, sessão compartilhada por canal |
 | **R7** | Redesenho: a ficha da obra | ✅ vira cartaz com arte, ficha técnica e botão de assistir; edição atrás de um gesto |
 | **R8** | Locadora (aba `experimentação`) | ✅ 600 caixas de VHS e DVD em estantes por gênero, em CSS 3D, com contracapa |
+| **R18** | O título que o disco estragou | ✅ o sósia Unicode de `: ? \| /` desfeito no parser: 1.540 obras da biblioteca e o canal de clipes inteiro |
+| **R18** | Guia de cinema | ✅ direção, elenco, trilha, gênero e década — cada nome com o que você tem e o que você fez com isso |
 | **R17** | A arte da grade ao vivo | ✅ o XMLTV já mandava a foto e o Odeon a descartava: cobertura de 25% → 90%, e marquise da casa onde não há foto nenhuma |
 | **R16** | Área de administração | ✅ pessoas, aparelhos, trabalhos e as quatro manutenções em ensaio-antes-de-executar; sete rotas ganharam tela |
 | **R15** | Redesenho: para você | ✅ estados frio/morno/quente, calibragem por ♥/✕, motivo virou seção, e a marquise acende |

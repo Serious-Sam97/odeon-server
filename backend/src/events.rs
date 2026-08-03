@@ -46,6 +46,41 @@ pub enum AppEvent {
         done: u64,
         failed: u64,
     },
+    /// Alguma coisa aconteceu na locadora (R19).
+    ///
+    /// **Sem escopo desde a R28.** O evento carregava o `circulo_id` de quem
+    /// mexeu, e ninguém filtrava por ele — nem o servidor ao publicar, nem a tela
+    /// ao receber. Com uma loja só ele deixou de ter até o que significar: o que
+    /// acontece na loja acontece pra todo mundo que está nela.
+    ///
+    /// **Um evento pra quatro ações**, e não quatro variantes: quem ouve faz a
+    /// mesma coisa com todas — recarrega a prateleira. O que muda é só a frase
+    /// que aparece na tela. Quatro variantes seriam quatro `match` do lado do
+    /// cliente pra chegar no mesmo `fetch`.
+    ///
+    /// É o pedido de volta que justifica isto existir: um bloqueio vira porta
+    /// quando quem está com a fita **sabe na hora** que pediram. O barramento
+    /// do M3 já entrega isso desde sempre.
+    Locadora {
+        /// `pegou` | `devolveu` | `pediu` | `venceu`.
+        acao: String,
+        /// Ausente em `venceu`: a varredura pode devolver várias de uma vez, e
+        /// nomear uma delas seria escolher arbitrariamente qual contar.
+        caixa_id: Option<Uuid>,
+        titulo: Option<String>,
+        quem_nome: Option<String>,
+    },
+    /// Chegou mensagem (R33).
+    ///
+    /// **Só o aviso, não o texto.** Quem recebe recarrega a conversa — e o
+    /// barramento é aberto a todos os aparelhos autenticados, então mandar o
+    /// conteúdo aqui entregaria a conversa a quem não é dela. O `para` é o
+    /// filtro que cada cliente aplica, como o `user_id` do `ProgrammeStarting`.
+    Mensagem {
+        de: Uuid,
+        de_nome: String,
+        para: Uuid,
+    },
     /// Um programa que alguém pediu pra ser avisado está começando.
     ///
     /// Vai pelo mesmo barramento do resto: o navegador já mantém UM `EventSource`

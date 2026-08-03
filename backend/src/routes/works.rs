@@ -300,6 +300,25 @@ pub async fn progress(
         _ => false,
     };
 
+    // `finished` é ACUMULATIVO, não o estado do instante.
+    //
+    // Ele era `finished = EXCLUDED.finished`, e isso apagava o terminado: quem
+    // reabrisse no minuto 30 um filme já visto voltava a constar como não
+    // visto. Medido neste acervo — 16 linhas, ZERO com `finished`, e ainda
+    // assim *Cassino Royale* com `play_count = 1`, que só sobe na transição
+    // falso→verdadeiro. O contador era o fóssil de um `finished` que existiu.
+    //
+    // "Terminado" responde *"eu já terminei isto alguma vez?"*, e a resposta
+    // não deixa de ser sim porque a pessoa começou de novo. Reassistir tem
+    // coluna própria desde o M0, que é o `play_count` logo abaixo.
+    //
+    // O contador precisou mudar junto: ele dependia de `NOT
+    // playback_state.finished`, então com o `finished` grudando ele congelaria
+    // em 1 para sempre — e levaria junto o bônus de reassistir do M5 (§8f),
+    // que é o sinal positivo mais forte que existe. Agora quem decide é a
+    // POSIÇÃO guardada: só conta como uma exibição nova quem chega ao fim
+    // vindo de um ponto que ainda não estava no fim. Isso também evita somar
+    // um a cada heartbeat depois dos 92%.
     sqlx::query(
         "INSERT INTO playback_state
             (user_id, work_id, position_seconds, duration_seconds, finished, play_count, updated_at)
@@ -307,9 +326,13 @@ pub async fn progress(
          ON CONFLICT (user_id, work_id) DO UPDATE SET
             position_seconds = EXCLUDED.position_seconds,
             duration_seconds = COALESCE(EXCLUDED.duration_seconds, playback_state.duration_seconds),
-            finished         = EXCLUDED.finished,
+            finished         = playback_state.finished OR EXCLUDED.finished,
             play_count       = playback_state.play_count
-                               + CASE WHEN EXCLUDED.finished AND NOT playback_state.finished
+                               + CASE WHEN EXCLUDED.finished
+                                       AND COALESCE(
+                                             playback_state.position_seconds
+                                             / NULLIF(playback_state.duration_seconds, 0), 0
+                                           ) < $6
                                       THEN 1 ELSE 0 END,
             updated_at       = now()",
     )
@@ -318,12 +341,71 @@ pub async fn progress(
     .bind(body.position_seconds)
     .bind(body.duration_seconds)
     .bind(finished)
+    .bind(FINISHED_RATIO)
+    .execute(&mut *tx)
+    .await?;
+
+    // 3. **E a fita anda** (R30).
+    //
+    // Uma fita é um objeto, e um objeto fica onde a última pessoa o deixou —
+    // tenha ela alugado ou não, devolvido ou não. Levantar no meio e sair já
+    // deixa a fita zoada pro próximo, que é o que a anotação original pediu:
+    // *"saber que estado deixou a fita para o próximo uso"*.
+    //
+    // Note que isto **não** substitui o `playback_state` acima, e a distinção é
+    // a fase inteira: aquele é a sua memória, este é o objeto. Rebobinar mexe
+    // num e não no outro, e é por isso que rebobinar deixou de ser destrutivo.
+    //
+    // O `WHERE` do ano faz a coisa toda virar no-op para DVD, sem um `if` aqui:
+    // disco não rebobina, ele lembra onde parou (§35). O número é servido pela
+    // locadora, e é o mesmo que a tela usa pra desenhar a lombada — se os dois
+    // divergissem, uma caixa desenhada como VHS não teria fita.
+    sqlx::query(
+        "INSERT INTO fita (work_id, posicao_segundos, duracao_segundos, deixada_por, deixada_em)
+         SELECT w.id, $2, $3, $4, now()
+         FROM work w
+         WHERE w.id = $1 AND w.year IS NOT NULL AND w.year <= $5
+         ON CONFLICT (work_id) DO UPDATE SET
+            posicao_segundos = EXCLUDED.posicao_segundos,
+            -- A duração só cresce pra um valor conhecido: um heartbeat sem ela
+            -- não deve apagar o comprimento da fita.
+            duracao_segundos = COALESCE(EXCLUDED.duracao_segundos, fita.duracao_segundos),
+            deixada_por      = EXCLUDED.deixada_por,
+            deixada_em       = now()",
+    )
+    .bind(id)
+    .bind(body.position_seconds.max(0.0))
+    .bind(body.duration_seconds.filter(|d| *d > 0.0))
+    .bind(user.id())
+    .bind(crate::routes::locadora::ULTIMO_ANO_VHS)
     .execute(&mut *tx)
     .await?;
 
     tx.commit().await?;
 
-    // 3. Avisa os outros aparelhos. Quem emitiu ignora o próprio eco pelo
+    // 4. **As conquistas.** Depois do commit, e de propósito: elas leem os
+    //    fatos que a transação acabou de gravar, e ler de dentro dela veria o
+    //    estado pela metade. Falhar aqui não desfaz o progresso — conquista não
+    //    é caminho crítico de reprodução (`conquistas::avaliar` engole o erro).
+    // 4. **O evento da semana vem ANTES das conquistas** (R34), e a ordem é
+    //    um defeito que a verificação encontrou: avaliando primeiro, a
+    //    conquista "Esteve lá" só abriria na ação seguinte — a pessoa termina o
+    //    filme do evento e a medalha aparece amanhã, quando ela clicar em outra
+    //    coisa. Registrar a participação primeiro é o que faz a recompensa
+    //    chegar no mesmo gesto que a mereceu.
+    if finished {
+        crate::routes::revista::talvez_participou(&state, user.id(), id).await;
+    }
+
+    // 5. Os desafios da janela, conferidos antes das conquistas pela mesma
+    //    razão que o evento: a conquista "Topou" tem que chegar no mesmo gesto
+    //    que fechou o desafio, não na ação seguinte.
+    crate::desafios::conferir(&state.pool, user.id()).await;
+
+    // 6. E aí as conquistas, que já enxergam o desafio e a participação de agora.
+    let novas = crate::conquistas::avaliar(&state.pool, user.id()).await;
+
+    // 7. Avisa os outros aparelhos. Quem emitiu ignora o próprio eco pelo
     //    device_id — sem isso o player brigaria com a própria atualização.
     crate::events::publish(
         &state.events,
@@ -336,7 +418,18 @@ pub async fn progress(
         },
     );
 
-    Ok(Json(json!({ "ok": true, "finished": finished })))
+    // As conquistas novas voltam na resposta do heartbeat, e não por evento:
+    // quem terminou o filme é quem tem que ver a medalha, e ele já está
+    // esperando esta resposta. Um evento no barramento avisaria os outros
+    // aparelhos da pessoa — e ninguém quer um pop-up de conquista no celular
+    // enquanto assiste na sala.
+    Ok(Json(json!({
+        "ok": true,
+        "finished": finished,
+        "conquistas": novas.iter().map(|q| json!({
+            "chave": q.chave, "nome": q.nome, "camada": q.camada, "pontos": q.pontos,
+        })).collect::<Vec<_>>(),
+    })))
 }
 
 // ------------------------------------------------------- biblioteca agrupada
@@ -574,7 +667,17 @@ async fn gravavel(dir: &std::path::Path) -> bool {
 }
 
 /// O que dá pra fazer com os arquivos deste servidor.
-pub async fn storage(State(state): State<AppState>) -> Json<Value> {
+/// O layout das montagens.
+///
+/// **Virou rota de administrador na R26** (§42). Ela respondia 200 pra conta
+/// comum com `/media`, `/media2`, `gravavel: true` e `pode_apagar: true` — ou
+/// seja, o mapa do disco e a confirmação de que ele é gravável. É exatamente o
+/// terceiro dos três compromissos que o §6.5 listou (a montagem gravável da
+/// R10), vazando por uma rota em vez de por uma montagem.
+pub async fn storage(
+    State(state): State<AppState>,
+    crate::auth::AdminUser(_): crate::auth::AdminUser,
+) -> Json<Value> {
     let mut raizes = Vec::new();
     for raiz in &state.config.media_roots {
         raizes.push(json!({

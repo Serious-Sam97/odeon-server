@@ -1,11 +1,14 @@
 mod artwork;
 mod auth;
 mod config;
+mod conquistas;
 mod cors;
 mod curation;
+mod desafios;
 mod error;
 mod events;
 mod jobs;
+mod llm;
 mod live;
 mod metadata;
 mod models;
@@ -14,6 +17,7 @@ mod scanner;
 mod scrub;
 mod tls;
 mod transcode;
+mod trivia;
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,6 +43,9 @@ pub struct AppState {
     pub hwaccel: Arc<transcode::Capabilities>,
     pub events: events::Bus,
     pub providers: metadata::Providers,
+    /// O redator do guia (R34). `None` quando não há chave — e aí a capa mostra
+    /// o tema e os filmes, e omite o ensaio, em vez de inventar prosa.
+    pub llm: Option<Arc<llm::Llm>>,
 }
 
 #[tokio::main]
@@ -115,6 +122,9 @@ async fn main() -> anyhow::Result<()> {
     let scrub_dir = config.scrub_dir.clone();
     let state = AppState {
         pool,
+        // O redator nasce antes do `Arc`, porque ele lê a chave — e o `config`
+        // é movido pra dentro do estado logo abaixo.
+        llm: llm::Llm::novo(&config).map(Arc::new),
         config: Arc::new(config),
         scan: Arc::new(Mutex::new(scanner::ScanStatus::default())),
         matching: Arc::new(Mutex::new(metadata::MatchStatus::default())),

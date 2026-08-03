@@ -33,7 +33,13 @@ pub const COOKIE_NAME: &str = "odeon_session";
 fn is_public(path: &str) -> bool {
     matches!(
         path,
-        "/api/health" | "/api/auth/status" | "/api/auth/login" | "/api/auth/setup"
+        "/api/health"
+            | "/api/auth/status"
+            | "/api/auth/login"
+            | "/api/auth/setup"
+            // R26: trocar um convite por conta acontece antes de haver sessão.
+            // O código é a credencial, e ele tem 128 bits e vence em 7 dias.
+            | "/api/convites/resgatar"
     )
 }
 
@@ -115,15 +121,26 @@ pub async fn require_auth(
         return Err(AppError::Unauthorized);
     }
 
-    let token = bearer(&request)
-        .or_else(|| cookie(&request))
-        .or_else(|| accepts_query_token(&path).then(|| query_token(&request)).flatten());
-
-    let Some(token) = token else {
-        return Err(AppError::Unauthorized);
+    // **Header e cookie resolvem sessão; a query resolve mídia.** (R27, §43)
+    //
+    // Até aqui os três caminhos caíam no mesmo `user_for_token`, e o que ia na
+    // query era o token de sessão — 90 dias, acesso total à API. Um
+    // `access.log` de proxy, um histórico de navegador ou um print com a URL
+    // do vídeo entregava uma conta inteira.
+    //
+    // Agora são duas tabelas e dois escopos. Um token de mídia vazado abre
+    // mídia, e por oito horas; ele não lista biblioteca, não aluga e não
+    // administra nada. E um token de sessão **deixa de funcionar na query** —
+    // que é o que faz a separação valer alguma coisa em vez de ser cerimônia.
+    let user = match bearer(&request).or_else(|| cookie(&request)) {
+        Some(token) => auth::user_for_token(&state.pool, &token).await,
+        None => match accepts_query_token(&path).then(|| query_token(&request)).flatten() {
+            Some(token) => auth::usuario_por_token_de_midia(&state.pool, &token).await,
+            None => None,
+        },
     };
 
-    let Some(user) = auth::user_for_token(&state.pool, &token).await else {
+    let Some(user) = user else {
         return Err(AppError::Unauthorized);
     };
 
@@ -145,6 +162,40 @@ mod tests {
         assert!(!is_public("/api/works"));
         assert!(!is_public("/api/auth/users"));
         assert!(!is_public("/api/stream/abc"));
+    }
+
+    /// **A invariante da R27** (§43): a query resolve mídia, e só mídia.
+    ///
+    /// O middleware escolhe a tabela pelo caminho por onde o token chegou —
+    /// header/cookie vão pra `auth_session`, query vai pra `media_token`. Se
+    /// alguém um dia reunir os três num `or_else` de novo, o token de sessão
+    /// volta a valer na URL e a fase inteira desaparece sem nenhum teste
+    /// quebrar. Este aqui quebra.
+    #[test]
+    fn a_query_nao_resolve_sessao() {
+        let fonte = include_str!("middleware.rs");
+        let corpo = fonte
+            .split("pub async fn require_auth")
+            .nth(1)
+            .expect("require_auth sumiu");
+
+        let i_query = corpo.find("query_token(&request)").expect("query_token sumiu");
+        let i_midia = corpo
+            .find("usuario_por_token_de_midia")
+            .expect("a query deixou de resolver token de mídia");
+        let i_sessao = corpo.find("user_for_token").expect("user_for_token sumiu");
+
+        // `user_for_token` (sessão) tem que aparecer ANTES do ramo da query —
+        // ou seja, no ramo do header/cookie. Se ele aparecer depois, a query
+        // está caindo na sessão de novo.
+        assert!(
+            i_sessao < i_query,
+            "o token de sessão voltou a ser resolvido pelo ramo da query"
+        );
+        assert!(
+            i_midia > i_query,
+            "a query deixou de resolver pelo `media_token`"
+        );
     }
 
     #[test]

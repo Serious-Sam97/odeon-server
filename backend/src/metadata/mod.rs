@@ -1,4 +1,7 @@
 pub mod anilist;
+pub mod producao;
+pub mod regiao;
+pub mod saga;
 pub mod score;
 pub mod tmdb;
 
@@ -911,6 +914,25 @@ pub async fn apply_candidate(
         }
     }
 
+    // A ficha de produção (R22, §38): país e idioma viram tags, e o filme que
+    // acabou de casar já nasce com elas — o aquecimento existe pros 548 que
+    // casaram antes, não pra ser o único caminho.
+    //
+    // Uma requisição a mais **por filme aceito**, e não por candidato avaliado:
+    // `production_countries` não vem no resultado da busca, e buscá-la antes do
+    // match seria pagar por candidato descartado. É a mesma forma que os
+    // créditos logo acima já usam.
+    if candidate.provider == "tmdb" && candidate.provider_kind == "movie" {
+        if let Some(client) = &providers.tmdb {
+            if let Err(e) =
+                producao::aplicar(pool, client, work.id, &candidate.provider_id).await
+            {
+                // Sem ficha não é motivo pra desfazer um match bom.
+                tracing::warn!(error = %e, "ficha de produção não veio do provider");
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -1202,7 +1224,7 @@ async fn ensure_collection(
     Ok(id)
 }
 
-async fn attach_tag(
+pub(crate) async fn attach_tag(
     pool: &PgPool,
     work_id: Uuid,
     namespace: &str,

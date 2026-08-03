@@ -168,6 +168,21 @@ pub async fn me(AuthUser(user): AuthUser) -> Json<User> {
     Json(user)
 }
 
+/// Emite um token de mídia pro aparelho que está pedindo.
+///
+/// Autenticada por header ou cookie, como qualquer rota de API — o token de
+/// mídia é o que ela **devolve**, nunca o que a abre.
+pub async fn media_token(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Json<Value>> {
+    let token = auth::emitir_token_de_midia(&state.pool, user.id).await?;
+    Ok(Json(json!({
+        "token": token,
+        "horas": auth::horas_do_token_de_midia(),
+    })))
+}
+
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     // Revoga o token exato que veio, não todos os do usuário: deslogar o
     // notebook não pode derrubar a TV.

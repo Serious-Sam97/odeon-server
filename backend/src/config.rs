@@ -13,6 +13,16 @@ pub struct Config {
     /// Aceita chave v3 (hex) ou token v4 (JWT). Sem ela, filmes e séries não são
     /// identificados — o AniList (anime) não precisa de chave nenhuma.
     pub tmdb_api_key: Option<String>,
+    /// A chave do Groq, pro conteúdo editorial do guia (R34).
+    ///
+    /// **Ausente é um estado normal**, não uma falha de configuração: sem ela o
+    /// guia mostra o tema e os filmes — que são fato do banco — e **omite o
+    /// ensaio**, em vez de inventar prosa. É o §18 aplicado ao texto gerado, e é
+    /// a razão de o tipo ser `Option` em vez de o boot exigir a chave.
+    pub groq_api_key: Option<String>,
+    /// Qual modelo escreve. Mora em variável porque a lista do Groq muda mais
+    /// rápido que este código, e trocar de modelo não devia exigir recompilar.
+    pub groq_model: String,
     /// Origens extras aceitas pelo CORS, além de localhost e do próprio host.
     pub allowed_origins: Vec<String>,
     /// `ODEON_ALLOWED_ORIGINS=*` — escotilha de emergência, com aviso no boot.
@@ -41,6 +51,11 @@ impl Config {
                 .ok()
                 .map(|k| k.trim().to_string())
                 .filter(|k| !k.is_empty()),
+            groq_api_key: std::env::var("GROQ_API_KEY")
+                .ok()
+                .map(|k| k.trim().to_string())
+                .filter(|k| !k.is_empty()),
+            groq_model: env_or("GROQ_MODEL", "llama-3.3-70b-versatile"),
             tls_cert: std::env::var("ODEON_TLS_CERT").ok().filter(|v| !v.is_empty()).map(PathBuf::from),
             tls_key: std::env::var("ODEON_TLS_KEY").ok().filter(|v| !v.is_empty()).map(PathBuf::from),
             https_bind: env_or("ODEON_HTTPS_BIND", "0.0.0.0:8443"),

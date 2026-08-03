@@ -1,3 +1,4 @@
+pub mod acesso;
 pub mod middleware;
 
 use argon2::password_hash::rand_core::OsRng;
@@ -18,6 +19,17 @@ use crate::AppState;
 /// 90 dias. É um servidor de casa: obrigar login semanal na TV seria hostil, e
 /// a revogação por sessão já cobre o caso "perdi o aparelho".
 const SESSION_DAYS: i64 = 90;
+
+/// Validade do token de mídia, em horas — **o número da R27** (§43).
+///
+/// Ele tem que sobreviver a assistir a coisa mais longa do acervo sem
+/// interrupção. Medido: o arquivo mais longo tem **4,9 h**, o filme mais longo
+/// 4,04 h, 15 arquivos passam de 3 h e **nenhum passa de 5 h**.
+///
+/// Oito horas cobrem o maior arquivo com três de pausa por cima, e são
+/// **1/270 da validade da sessão**. Menos que isso quebraria a reprodução no
+/// meio; mais desfaria a razão de a fase existir.
+const MEDIA_TOKEN_HOURS: i64 = 8;
 
 /// Abaixo disto nem adianta ter Argon2.
 const MIN_PASSWORD_LEN: usize = 8;
@@ -151,11 +163,88 @@ pub async fn user_for_token(pool: &PgPool, token: &str) -> Option<User> {
     user
 }
 
+// ------------------------------------------------------- token de mídia
+//
+// O compromisso que o §9b declarou no M6 e que o §6.5 listou como dívida:
+// `<video src>`, `<img src>` e `<track>` não mandam header, então o token vai
+// na query — e query vaza pra log de acesso e histórico de navegador.
+//
+// Até a R27 o que ia ali era o **token de sessão**: 90 dias, acesso total à
+// API. Agora vai um token que só abre mídia e vence em horas.
+
+/// Emite um token de mídia pra este usuário.
+///
+/// **Aposenta os anteriores do mesmo usuário.** Um aparelho que pede um token
+/// novo é um aparelho que perdeu o antigo de vista; deixar os velhos vivos só
+/// aumentaria a janela de um vazamento sem servir a ninguém.
+pub async fn emitir_token_de_midia(pool: &PgPool, user_id: Uuid) -> Result<String, AppError> {
+    let token = generate_token();
+    let mut tx = pool.begin().await?;
+
+    sqlx::query("DELETE FROM media_token WHERE user_id = $1 OR expira_em <= now()")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+
+    sqlx::query("INSERT INTO media_token (token_hash, user_id, expira_em) VALUES ($1, $2, $3)")
+        .bind(hash_token(&token))
+        .bind(user_id)
+        .bind(Utc::now() + Duration::hours(MEDIA_TOKEN_HOURS))
+        .execute(&mut *tx)
+        .await?;
+
+    tx.commit().await?;
+    Ok(token)
+}
+
+/// Resolve um token **de mídia**. Nunca um token de sessão.
+///
+/// A separação é a fase inteira: um token de sessão na query deixa de
+/// funcionar, e é isso que faz o vazamento em log parar de valer uma conta.
+pub async fn usuario_por_token_de_midia(pool: &PgPool, token: &str) -> Option<User> {
+    sqlx::query_as(
+        "SELECT u.id, u.username, u.display_name, u.role, u.is_active,
+                u.created_at, u.last_login_at
+         FROM media_token m JOIN app_user u ON u.id = m.user_id
+         WHERE m.token_hash = $1 AND m.expira_em > now() AND u.is_active",
+    )
+    .bind(hash_token(token))
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Quanto tempo o token de mídia vale, pro cliente saber quando renovar.
+pub fn horas_do_token_de_midia() -> i64 {
+    MEDIA_TOKEN_HOURS
+}
+
 pub async fn revoke(pool: &PgPool, token: &str) {
+    let hash = hash_token(token);
+
+    // Quem é o dono da sessão — precisamos disso ANTES de apagá-la, pra
+    // revogar a mídia dele junto. Sair e continuar podendo puxar bytes por oito
+    // horas seria um "sair" que não sai.
+    let dono: Option<(Uuid,)> =
+        sqlx::query_as("SELECT user_id FROM auth_session WHERE token_hash = $1")
+            .bind(&hash)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
+
     let _ = sqlx::query("DELETE FROM auth_session WHERE token_hash = $1")
-        .bind(hash_token(token))
+        .bind(&hash)
         .execute(pool)
         .await;
+
+    if let Some((user_id,)) = dono {
+        let _ = sqlx::query("DELETE FROM media_token WHERE user_id = $1")
+            .bind(user_id)
+            .execute(pool)
+            .await;
+    }
 }
 
 /// Existe alguém com senha definida? Se não, é primeira execução e a rota de

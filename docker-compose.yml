@@ -44,6 +44,8 @@ services:
       ODEON_CACHE_DIR: /cache
       # Sem isso, filmes e séries não são identificados. AniList (anime) funciona sem chave.
       TMDB_API_KEY: ${TMDB_API_KEY:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROQ_MODEL: ${GROQ_MODEL:-llama-3.3-70b-versatile}
       # Origens EXTRAS pro CORS. localhost e o próprio host da requisição já
       # passam sozinhos — isto é só pra quando o front vier de outro nome.
       ODEON_ALLOWED_ORIGINS: ${ODEON_ALLOWED_ORIGINS:-}

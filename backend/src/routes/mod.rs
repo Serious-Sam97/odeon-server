@@ -1,12 +1,24 @@
 pub mod auth;
+pub mod amigos;
+pub mod avaliacao;
 pub mod browse;
+pub mod convite;
 pub mod curation;
+pub mod curiosidades;
+pub mod feed;
 pub mod graph;
+pub mod guia;
 pub mod live;
+pub mod locadora;
+pub mod menu;
 pub mod metadata;
 pub mod people;
+pub mod perfil;
 pub mod playback;
+pub mod retrospectiva;
+pub mod revista;
 pub mod scopes;
+pub mod social;
 pub mod scrub;
 pub mod stream;
 pub mod works;
@@ -16,7 +28,7 @@ use axum::routing::{delete, get, post, put};
 use axum::{Json, Router};
 use serde_json::{json, Value};
 
-use crate::auth::AdminUser;
+use crate::auth::{AdminUser, AuthUser};
 use crate::error::AppResult;
 use crate::models::{Library, NewLibrary};
 use crate::scanner;
@@ -31,6 +43,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/auth/login", post(auth::login))
         .route("/api/auth/logout", post(auth::logout))
         .route("/api/auth/me", get(auth::me))
+        // R27: o token que vai no `?token=` das rotas de mídia. Curto, e sem
+        // acesso a nada além de bytes — ver `auth/middleware.rs`.
+        .route("/api/auth/media-token", post(auth::media_token))
         .route("/api/auth/password", post(auth::change_password))
         .route(
             "/api/auth/sessions",
@@ -45,6 +60,14 @@ pub fn router(state: AppState) -> Router {
             delete(auth::delete_user).patch(auth::update_user),
         )
         .route("/api/auth/sessions/{id}", delete(auth::revoke_one))
+        // --- R26: o convidado ---
+        // `resgatar` é público como o login: quem troca o código por conta
+        // ainda não tem sessão, e é o código que autentica.
+        .route("/api/convites", get(convite::listar).post(convite::criar))
+        .route("/api/convites/{para}", delete(convite::revogar))
+        .route("/api/convites/resgatar", post(convite::resgatar))
+        // R26: `root_path` é o caminho do SEU disco. A auditoria da §42
+        // encontrou `/media/Movies` numa resposta 200 pra conta comum.
         .route("/api/libraries", get(list_libraries).post(create_library))
         .route("/api/libraries/{id}", delete(delete_library).patch(update_library))
         .route("/api/browse", get(browse::browse))
@@ -104,6 +127,124 @@ pub fn router(state: AppState) -> Router {
         // --- M2: o grafo ---
         .route("/api/people", get(people::list))
         .route("/api/people/{id}", get(people::detail))
+        // --- R18: o guia de cinema ---
+        // Sem schema novo: é uma pergunta nova sobre `credit` (§8h) cruzada com
+        // o `playback_state` do M0. Ver o cabeçalho do módulo.
+        .route("/api/guia", get(guia::eixos))
+        .route("/api/guia/pessoas", get(guia::pessoas))
+        // Rota própria, e buscada depois que o cartaz já está na tela: são sete
+        // consultas, e nenhuma delas vale atrasar a leitura da sinopse.
+        .route(
+            "/api/works/{id}/curiosidades",
+            get(curiosidades::curiosidades),
+        )
+        // Busca a trivia de todos os filmes de uma vez. É `job` e não requisição
+        // síncrona porque são 548 filmes com duas chamadas externas cada — a
+        // dívida que o §21 registrou e que esta rota não repete.
+        .route("/api/maintenance/aquecer-trivia", post(aquecer_trivia))
+        // R22: a ficha de produção dos 548 filmes já casados. Também `job` —
+        // e é a dívida que o `IDEIAS.md` §8 marcou como "pela terceira vez um
+        // reparo de minutos vai correr dentro de um request".
+        .route("/api/maintenance/aquecer-producao", post(aquecer_producao))
+        // R32: as sagas. `belongs_to_collection` do TMDB, que o `IDEIAS.md` §7
+        // registrava como dívida — pré-requisito das conquistas de trilogia.
+        .route("/api/maintenance/aquecer-sagas", post(aquecer_sagas))
+        // --- R19: a locadora, e R28: o estoque é do servidor ---
+        // A prateleira devolve só o que está FORA, não o estado das 746 caixas:
+        // quem cruza com a estante é a tela, que já tem as caixas na mão.
+        .route("/api/locadora/prateleira", get(locadora::prateleira))
+        // R20: a loja da semana. Uma requisição no lugar das doze que a tela
+        // fazia — porque reivindicar a estante e cortá-la são a mesma decisão.
+        .route("/api/locadora/estantes", get(locadora::estantes))
+        // R29: as opções da loja. Ler é de qualquer morador — saber por quantos
+        // dias a fita é sua não é privilégio —, gravar é de administrador.
+        .route(
+            "/api/locadora/opcoes",
+            get(locadora::ler_opcoes).put(locadora::salvar_opcoes),
+        )
+        .route("/api/locadora/alugar", post(locadora::alugar))
+        .route("/api/locadora/devolver/{id}", post(locadora::devolver))
+        .route("/api/locadora/pedir/{id}", post(locadora::pedir_de_volta))
+        // Destrutivo: apaga o "continuar de onde parou". A confirmação é da
+        // tela, mas o §22 exige que ela exista — ver o handler.
+        .route("/api/locadora/rebobinar", post(locadora::rebobinar))
+        // R30: onde está esta fita. Rota própria, chamada **no play** — a
+        // estante não sabe, de propósito: você descobre quando põe pra tocar.
+        .route("/api/locadora/fita/{id}", get(locadora::fita))
+        // --- R21: o menu de DVD ---
+        // O menu numa requisição; as cenas em outra, e só quando alguém entra
+        // na tela de cenas — extrair doze quadros custa ~6s e ninguém deve
+        // pagar isso por abrir o menu.
+        .route("/api/works/{id}/menu", get(menu::menu))
+        .route("/api/works/{id}/cenas", get(menu::cenas))
+        // --- R23: a nota e a resenha ---
+        // `PUT` porque avaliar de novo é trocar de ideia, não criar uma segunda
+        // avaliação — a chave `(user_id, work_id)` já dizia isso.
+        .route(
+            "/api/works/{id}/avaliacao",
+            get(avaliacao::listar)
+                .put(avaliacao::salvar)
+                .delete(avaliacao::apagar),
+        )
+        // --- R24: a retrospectiva ---
+        //
+        // O §40 fez dela e do placar duas rotas separadas "pra a decisão ser
+        // reversível". Ela foi: o placar saiu na R32 apagando um arquivo e uma
+        // linha, exatamente como previsto — e a retrospectiva ficou, porque
+        // descrever quem você é continua sendo outra coisa que dar ponto.
+        // --- R25: o mural, com o escopo que a R28 deu a ele ---
+        // Nenhuma tabela nova: é um UNION sobre `play_event`, `emprestimo` e
+        // `avaliacao`, agora escopado por **você e seus amigos**.
+        .route("/api/feed", get(feed::feed))
+        // --- R33: a rede social ---
+        //
+        // Presença, busca, post, comentário e conversa. O comentário é **uma
+        // rota pros dois alvos**, espelhando a tabela: duas rotas quase iguais
+        // seriam duas telas e duas chances de divergirem.
+        .route("/api/presenca", get(social::presenca))
+        .route("/api/pessoas", get(social::pessoas))
+        .route("/api/posts", post(social::postar))
+        .route("/api/posts/{id}", delete(social::apagar_post))
+        .route("/api/comentarios", post(social::comentar))
+        .route("/api/comentarios/{id}", delete(social::apagar_comentario))
+        .route(
+            "/api/avaliacao/{quem}/{obra}/comentarios",
+            get(social::comentarios_da_review),
+        )
+        .route("/api/mensagens", get(social::conversas))
+        .route(
+            "/api/mensagens/{com}",
+            get(social::conversa).post(social::mandar),
+        )
+        // --- R28: amigos ---
+        // Três rotas pro que era um grupo inteiro. `POST` pede **ou** aceita, e
+        // `DELETE` recusa, cancela ou desfaz: quem sabe em qual dos estados a
+        // relação está é a linha do banco, não o cliente que carregou a tela
+        // meio minuto atrás.
+        .route("/api/amigos", get(amigos::listar))
+        .route(
+            "/api/amigos/{id}",
+            post(amigos::pedir).delete(amigos::desfazer),
+        )
+        // --- R34: a revista da semana ---
+        //
+        // A capa do guia. O índice do §30 continua onde estava — ele virou a
+        // parte de consulta, atrás da revista.
+        .route("/api/guia/revista", get(revista::revista))
+        .route("/api/retrospectiva", get(retrospectiva::retrospectiva))
+        // --- R32: o perfil, e o placar que ele substitui ---
+        //
+        // O §40 pôs o placar numa aba própria "pra ser reversível", e o efeito
+        // foi ele ficar escondido. A comparação com os amigos mora **dentro**
+        // do perfil: é lá que alguém vai olhar.
+        .route("/api/perfil", get(perfil::meu).put(perfil::salvar))
+        .route("/api/perfil/{id}", get(perfil::de_alguem))
+        // --- R35: os desafios ---
+        //
+        // Gerados na leitura, e idempotentes: o `UNIQUE` da 0034 faz a segunda
+        // chamada na mesma janela não inserir nada. Sem job.
+        .route("/api/desafios", get(perfil::desafios))
+        .route("/api/desafios/cadencia", put(perfil::salvar_cadencia))
         .route("/api/works/{id}/credits", get(people::work_credits))
         .route("/api/tags", get(graph::list_tags))
         .route("/api/tag-namespaces", get(graph::list_namespaces))
@@ -208,6 +349,110 @@ async fn cancel_job(
     })))
 }
 
+/// Dispara o aquecimento do cache de trivia. Responde na hora com o id do job;
+/// o acompanhamento é por `GET /api/jobs`, como as outras operações longas.
+async fn aquecer_trivia(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+) -> AppResult<Json<Value>> {
+    let Some(job) = crate::jobs::Job::start(
+        &state.pool,
+        "trivia",
+        json!({}),
+        Some(user.id),
+    ).await else {
+        // `Job::start` devolve `None` tanto para "já existe um ativo" quanto
+        // para "o INSERT falhou", e a diferença importa: a primeira versão
+        // desta rota respondia "já há um aquecimento em andamento" quando na
+        // verdade o CHECK de `job.kind` estava recusando o tipo novo (0020).
+        // Um erro disfarçado de estado normal é o que o §8b chama de errar em
+        // silêncio — então aqui a resposta pergunta ao banco antes de afirmar.
+        let ativo = crate::jobs::latest(&state.pool, "trivia")
+            .await
+            .map(|j| j.state == "running")
+            .unwrap_or(false);
+        return Ok(Json(json!({
+            "started": false,
+            "reason": if ativo {
+                "já há um aquecimento em andamento"
+            } else {
+                "o banco recusou abrir o job — confira o CHECK de job.kind"
+            },
+        })));
+    };
+
+    let id = job.id;
+    let pool = state.pool.clone();
+    let http = state.providers.http.clone();
+    tokio::spawn(async move { crate::trivia::aquecer(pool, http, Some(job)).await });
+
+    Ok(Json(json!({ "started": true, "job_id": id })))
+}
+
+/// Dispara o aquecimento da ficha de produção. Mesma forma do de trivia, e
+/// pela mesma razão — inclusive a de perguntar ao banco antes de afirmar que
+/// já há um em andamento (§34).
+async fn aquecer_producao(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+) -> AppResult<Json<Value>> {
+    let Some(job) =
+        crate::jobs::Job::start(&state.pool, "producao", json!({}), Some(user.id)).await
+    else {
+        let ativo = crate::jobs::latest(&state.pool, "producao")
+            .await
+            .map(|j| j.state == "running")
+            .unwrap_or(false);
+        return Ok(Json(json!({
+            "started": false,
+            "reason": if ativo {
+                "já há um aquecimento em andamento"
+            } else {
+                "o banco recusou abrir o job — confira o CHECK de job.kind"
+            },
+        })));
+    };
+
+    let id = job.id;
+    let pool = state.pool.clone();
+    let providers = state.providers.clone();
+    tokio::spawn(async move {
+        crate::metadata::producao::aquecer(pool, providers, Some(job)).await
+    });
+
+    Ok(Json(json!({ "started": true, "job_id": id })))
+}
+
+/// Busca a saga de cada filme identificado. Mesmo molde do aquecimento de
+/// produção (§38): job, progresso visível, cancelamento e retomada pelo `WHERE`.
+async fn aquecer_sagas(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+) -> AppResult<Json<Value>> {
+    let Some(job) = crate::jobs::Job::start(&state.pool, "saga", json!({}), Some(user.id)).await
+    else {
+        let ativo = crate::jobs::latest(&state.pool, "saga")
+            .await
+            .map(|j| j.state == "running")
+            .unwrap_or(false);
+        return Ok(Json(json!({
+            "started": false,
+            "reason": if ativo {
+                "já há uma busca de sagas em andamento"
+            } else {
+                "o banco recusou abrir o job — confira o CHECK de job.kind"
+            },
+        })));
+    };
+
+    let id = job.id;
+    let pool = state.pool.clone();
+    let providers = state.providers.clone();
+    tokio::spawn(async move { crate::metadata::saga::aquecer(pool, providers, Some(job)).await });
+
+    Ok(Json(json!({ "started": true, "job_id": id })))
+}
+
 async fn health(State(state): State<AppState>) -> AppResult<Json<Value>> {
     let one: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&state.pool).await?;
     Ok(Json(json!({
@@ -217,11 +462,43 @@ async fn health(State(state): State<AppState>) -> AppResult<Json<Value>> {
     })))
 }
 
-async fn list_libraries(State(state): State<AppState>) -> AppResult<Json<Vec<Library>>> {
+/// As bibliotecas.
+///
+/// **O `root_path` some pra quem não é administrador** (R26, §42). A auditoria
+/// encontrou `/media/Movies` e `/media2/Movies` numa resposta 200 pra conta
+/// comum — o caminho do disco de outra pessoa é informação de dono.
+///
+/// A lista inteira não vira rota de admin porque ela alimenta o filtro por
+/// biblioteca da tela: nome e id são legítimos pra quem navega, o caminho não.
+/// Esconder a lista consertaria o vazamento quebrando a biblioteca, que é o
+/// tipo de conserto que o §22 chama de regra inventada.
+async fn list_libraries(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Json<Vec<Value>>> {
     let libraries = sqlx::query_as::<_, Library>("SELECT * FROM library ORDER BY created_at")
         .fetch_all(&state.pool)
         .await?;
-    Ok(Json(libraries))
+
+    let dono = crate::auth::acesso::e_morador(&user) && user.is_admin();
+    Ok(Json(
+        libraries
+            .into_iter()
+            .map(|l| {
+                let mut v = json!({
+                    "id": l.id,
+                    "name": l.name,
+                    "default_kind": l.default_kind,
+                    "provider_hint": l.provider_hint,
+                    "created_at": l.created_at,
+                });
+                if dono {
+                    v["root_path"] = json!(l.root_path);
+                }
+                v
+            })
+            .collect(),
+    ))
 }
 
 async fn create_library(

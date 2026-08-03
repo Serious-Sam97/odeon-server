@@ -3,6 +3,20 @@
 Documento vivo. Registra **por que** cada escolha foi feita, pra que daqui a seis
 meses ninguém (inclusive eu) desfaça uma decisão boa por esquecer o motivo.
 
+> **Aviso de leitura, 03/08/2026.** As seções **§30 e §35 a §42** foram escritas
+> em cima de um documento de ideias que se revelou uma *interpretação* da visão
+> de quem decide, não a visão. Elas ficam aqui inteiras — o raciocínio e as
+> medições continuam válidos —, mas **várias das decisões que elas registram
+> foram revistas**. Cada uma dessas seções começa com um bloco de revisão
+> dizendo o quê e apontando para o `IDEIAS.md`, que foi reescrito a partir das
+> anotações originais.
+>
+> A lição, que vale mais que qualquer uma delas: **prosa convincente sobre uma
+> decisão errada é mais difícil de desfazer do que a decisão.**
+>
+> A **§44** é a primeira seção escrita depois do realinhamento, e é a que desfaz
+> o maior dos desvios: o círculo.
+
 ---
 
 ## 1. A tese
@@ -2716,3 +2730,3258 @@ foto de **todos** os programas no ar — nenhum deles está em `work` nem em
 `collection`, e a limpeza os leria como lixo. A consulta estava duplicada nos
 dois lados da limpeza (ensaio e execução); virou uma constante só, porque duas
 cópias divergindo significaria contar uma coisa e apagar outra.
+
+## 29. O título que o disco estragou
+
+O pedido foi "arruma o título do Clipe Show". O canal mostrava
+`Bo.Burnham.Inside.2021.1080p.WEBRip.x264.AAC5.1-[YTS.MX]` e
+`Happy Tree Friends： Still Alive`. Medindo antes de mexer, o canal virou o
+sintoma de uma coisa muito maior: **1.542 obras da biblioteca — quase 9% —
+têm o mesmo defeito.**
+
+### O sósia
+
+Nenhum sistema de arquivos aceita `/ \ : * ? " < >` num nome, e todo downloader
+resolve isso do mesmo jeito: troca o caractere por um **sósia Unicode** que
+parece com ele e não é. `：` (U+FF1A) no lugar do dois-pontos, `？` no lugar da
+interrogação, `⧸` no lugar da barra. O arquivo sobrevive no disco; o título
+chega ao Odeon escrito errado.
+
+Neste acervo:
+
+| sósia | o que era | obras |
+|---|---|---|
+| `：` | `:` | 1.246 |
+| `？` | `?` | 529 |
+| `｜` | `\|` | 145 |
+| `⧸` | `/` | 109 |
+| `＂` | `"` | 64 |
+
+O `：` sozinho aparece em 1.246 — é o dois-pontos de subtítulo, que quase toda
+série tem. `AC⧸DC`, `Snow What？ That's What`, `Salad Fingers 10： Birthday`.
+
+O conserto mora no `scanner::guess`, que é o funil por onde **todo** nome de
+arquivo e de pasta passa. Desfazer é seguro exatamente ali porque a entrada é,
+por definição, um nome de arquivo: se o sósia está no nome, foi o downloader que
+o pôs. Um título que não tem sósia nenhum sai na primeira linha da função, sem
+pagar nada.
+
+E como o conserto é no parser, a manutenção **Reprocessar o parse** (§27) já
+sabia aplicá-lo ao que estava gravado: 1.540 obras corrigidas de uma vez. Só o
+ensaio, antes, mostrando o "de → para" — que é a razão de o botão ser esse.
+
+O ensaio revelou 212 mudanças **além** das do sósia: `Episódio 61` →
+`O Pequeno Urso`, com o número do episódio preservado. Não são desta correção —
+são melhorias de parser de sessões anteriores que nunca tinham sido aplicadas
+aos dados. O reparse só toca obras `unmatched`/`needs_review`, então nada
+casado com o provider foi tocado. Ficaram 2 obras com sósia, as duas
+`ignored` — que é o certo: `ignored` é obra que alguém descartou de propósito.
+
+### Do lado do ao vivo
+
+O ErsatzTV manda o que a biblioteca dele tem, e a biblioteca dele tem nome de
+arquivo. Duas limpezas no importador, e a segunda é conservadora de propósito:
+o parser de nome de arquivo só entra quando o título **não tem espaço nenhum e
+tem ponto**, que é a assinatura de um release. `Bee Gees - One Night Only - 1997
+(Full Concert HD)` é título de verdade e passa intacto — mandá-lo pro parser
+custaria o `(Full Concert HD)` sem ganhar nada. Resultado: 30 sósias e 15 nomes
+de release, todos zerados, sem tocar nos outros 61 títulos do canal.
+
+Os 2 lembretes agendados sobreviveram, o que não era óbvio: a identidade de um
+programa entre importações é canal + horário + **título** (§25), e mudar o
+título mudaria a identidade. Nenhum dos dois estava num programa renomeado.
+
+### O que só aparece quando o título fica legível
+
+Corrigido o nome, o canal passou a mostrar títulos de vídeo do YouTube — e
+`Cyberpunk: Edgerunners | "I Really Want to Stay At Your House" by Rosa Walton
+| Music Video` toma **quatro linhas** e empurra a barra de progresso e o
+`SINTONIZAR` pra fora do bloco, que tem altura fixa. Três linhas e reticências.
+
+É o par exato do `overflow-wrap: anywhere` que o mesmo canal já tinha exigido:
+lá o problema era uma palavra longa demais pra caber na largura, aqui são
+palavras demais pra caber na altura. Os dois vieram do mesmo lugar.
+
+## 30. R18 — o guia de cinema
+
+> **Feito na R34 (§50).** A revista existe: tema da semana sorteado do acervo
+> (cinco eixos, incluindo as sagas que a R32 materializou), ensaio gerado por
+> LLM sobre fatos do banco — com selo, e omitido quando não há chave — e um
+> evento em cartaz que dá XP e conquista. **O índice desta seção não morreu:**
+> ele desceu e virou a parte de consulta, atrás da capa.
+>
+> **Revisto em 03/08/2026.** O que foi entregue é um **índice** — cartões por
+> pessoa, gênero e década, para consulta. A visão pede uma **revista que muda**:
+> tema por semana, eventos de um filme ou saga para incentivar a assistir, e o
+> acervo servindo para ensinar história do cinema. E **igual para todo mundo**,
+> de propósito, para haver assunto em comum.
+>
+> O índice não morre: vira a camada de consulta atrás da revista.
+>
+> Ver `IDEIAS.md` §3.1.
+
+Primeira fase saída do `docs/IDEIAS.md`, e a que a medição escolheu: **418
+diretores distintos, 134 com duas obras ou mais, e cobertura de direção de
+100% nos filmes identificados** (548 de 548). Não faltava dado. Faltava tela.
+
+### A tese, e por que ela exige o histórico
+
+Um guia de cinema que qualquer site tem é a Wikipédia com passos extras. Então
+nenhuma página aqui é biografia: toda pessoa responde três coisas ao mesmo
+tempo — quem é, **o que disso você tem**, e **o que você fez com isso**. A
+terceira é a que só este servidor pode dar, porque é o `credit` (§8h) cruzado
+com o histórico que existe desde o M0.
+
+Backend novo: **nenhuma tabela, nenhuma migração.** Duas rotas (`/api/guia` e
+`/api/guia/pessoas`) sobre o que já estava lá.
+
+### A contagem estava errada, e o próprio dado denunciou
+
+A primeira versão contava `work`, e o ranking de direção saiu assim:
+
+```
+Enrique Segoviano  221 obras   (Chaves e Chapolin)
+Joseph Barbera     166 obras   (Tom & Jerry)
+```
+
+São episódios. É a falha da R3 (§14) — *"14.657 episódios não são uma
+biblioteca"* — reaparecendo num eixo novo. E havia uma pista no próprio
+resultado: quem tinha 221 obras tinha **um** pôster distinto, porque desde a R9
+(§21) o episódio herda a arte da série.
+
+A unidade passou a ser o **título**, com o mesmo rollup de `/api/library`, e
+vale a regra que a locadora já usava: uma série é uma caixa, não vinte e uma
+(§20). Depois disso o eixo virou o que devia ser:
+
+```
+Chris Columbus 7 · Robert Zemeckis 7 · James Cameron 6
+Hans Zimmer 16 · Alan Silvestri 15 · John Williams 13
+```
+
+**Um resíduo medido e aceito:** 92 episódios identificados (1,1% de 8.068) não
+estão em nenhuma coleção `season`/`series`, e cada um conta como título
+próprio — é o que infla o elenco de *Arrested Development* para 26. Isso é
+qualidade de dado, não do guia, e consertar num caminho de leitura seria
+maquiar. É material para o painel de saúde do §24, que existe justamente pra
+mostrar o que está torto.
+
+### O bug do agrupamento: pôster nunca é chave
+
+Depois do rollup, um diretor de 43 episódios de UMA série continuava voltando
+como 43 títulos. A causa era o `GROUP BY` incluir o pôster junto do id do
+grupo: quando a série não tem arte própria, cada episódio cai no pôster dele
+mesmo e o grupo se parte. Pôster é **agregado** (`max`), nunca chave.
+
+O caso existe neste acervo porque a única série de AniList é justamente a que
+o reparo da §21 não conseguiu enriquecer.
+
+### Duas telas discordando sobre a mesma palavra
+
+`terminadas` foi escrito lendo `playback_state.finished` — que é **falso nas 16
+linhas** deste acervo. Ao lado, a tela "para você" anunciava *2 obras
+terminadas*.
+
+Quem está certo é o M5: terminada é `event_type = 'finish'` **ou** ter passado
+de 92% da duração (§8f). Não existe um único evento `finish` neste acervo, então
+os dois casos vêm todos da razão — que é exatamente por que aquela regra tem as
+duas metades. O guia passou a ler a mesma fonte, e o resultado é verificável:
+**Martin Campbell, 1 terminado de 2** — ele dirigiu *Cassino Royale*.
+
+### E o defeito que isso desenterrou
+
+`playback_state.finished` não é apenas nulo: ele é **apagado**. O `ON CONFLICT`
+do `POST /api/works/{id}/progress` faz `finished = EXCLUDED.finished`, então
+reabrir no minuto 30 um filme já terminado desmarca o "terminado".
+
+A prova está na própria linha: *Cassino Royale* tem `play_count = 1` — e o
+contador só incrementa na transição falso→verdadeiro — com `finished = false`.
+
+Isso é anterior à R18 e afeta os contadores de "vistos" da biblioteca e da
+temporada. A curadoria escapa por ler `play_event`. Corrigido logo depois, a
+pedido de quem administra — ver §31.
+
+### O botão que mentia
+
+O mínimo de obras por pessoa estava escrito em dois lugares — 3 na capa, 2 na
+lista completa. O efeito: o botão dizia *"ver as 644"* e abria uma lista de
+**1.424**. Um total que muda ao atravessar o próprio botão é pior que não ter
+total, e é a mesma família do "Biblioteca 300" que a R3 (§14) corrigiu.
+
+Agora o número mora em `minimo_de(role)` e as duas rotas o consultam. Elenco
+pede 3 porque é o eixo com mais gente por natureza (73.507 créditos contra
+1.191 de direção); o resto fica em 2.
+
+### Um número certo pode fazer a tela parecer quebrada
+
+O cartão dizia "7 títulos" e a ficha listava 12 obras logo abaixo. Os dois
+estavam certos: o guia conta **um papel** (direção) e a filmografia traz todos
+os créditos — Columbus também assina roteiro e produção. Dois acertos que juntos
+lêem como defeito.
+
+A ficha passou a dizer de que papel é a contagem: *"7 títulos em direção · 12
+obras no acervo contando os outros papéis"*.
+
+### O que não entrou, e por quê
+
+- **Produção**, apesar de ser o segundo maior volume (45.741 créditos contra
+  1.191 de direção). A allowlist do §8h já tinha decidido isso uma vez: um eixo
+  de produção enterraria a direção em assistente de efeitos.
+- **Região.** Conferido em `metadata/tmdb.rs`: o Odeon busca título, sinopse,
+  ano, gêneros e arte — país, idioma, empresa e orçamento não têm coluna. É
+  `ALTER TABLE` mais uma revisita de 548 filmes, e está planejado como R22.
+- **Selo de "visto" no cartão da filmografia.** O cabeçalho fala de histórico
+  (o máximo que você já alcançou); o cartão só recebe a posição atual. São
+  perguntas diferentes, e um selo ali alegaria o que o payload não sabe. Ficou
+  a barra de progresso, como no resto do app.
+
+### Gênero e década contam filmes, de propósito
+
+Num acervo com 14.657 episódios contra 635 filmes, contar tudo faria "Drama"
+significar "uma série longa que eu tenho". São 19 gêneros e 7 décadas, e os dois
+eixos não ganharam tela própria: caem no filtro de `/api/works`, que resolve tag
+e faixa de ano desde o M2.
+
+### Verificação
+
+Contra o acervo real, com Firefox por Marionette (o método do §23, reescrito —
+o `scratchpad/` original não está no repositório):
+
+| | |
+|---|---|
+| `/api/guia` | 200 em 0,59s, 18 KB |
+| `/api/guia/pessoas` | 0,07s (direção) · 0,38s (elenco, 73.507 créditos) · 0,08s (busca) |
+| a capa | 5 seções, 36 pessoas, 26 faixas, sem estouro horizontal |
+| busca "Campbell" | *"Martin Campbell · 2 títulos · 1 terminado"* |
+| a ficha | *"2 títulos em direção"*, *"você terminou 1"*, os dois Bond com a barra de progresso |
+| a 700px | nada estoura na horizontal |
+
+A linha do histórico só aparece em quem tem histórico — **2 diretores, 10 do
+elenco, 3 da trilha**. É a regra do §24 aplicada ao cartão: linha limpa some.
+Escrever "0 terminadas" em 127 cartões ensina a não ler o cartão, e aí o número
+que importar também não será lido.
+
+## 31. `finished` é acumulativo, não o estado do instante
+
+O defeito que a R18 desenterrou (§30), consertado.
+
+### O que estava errado
+
+O upsert de `POST /api/works/{id}/progress` fazia `finished = EXCLUDED.finished`.
+Isso transforma o campo na resposta a *"você está no fim agora?"*, quando a
+pergunta que quatro telas fazem é *"você já terminou isto alguma vez?"*. Reabrir
+no minuto 30 um filme já visto apagava o visto.
+
+A prova estava na própria linha, e é o tipo de evidência que só aparece olhando
+dado real: 16 linhas em `playback_state`, **zero com `finished`**, e ainda assim
+*007: Cassino Royale* com `play_count = 1` — contador que só sobe na transição
+falso→verdadeiro. Era o fóssil de um `finished` que existiu e foi sobrescrito.
+
+### O conserto foi de duas linhas, não de uma
+
+A primeira é óbvia: `finished = playback_state.finished OR EXCLUDED.finished`.
+
+A segunda não era, e teria passado despercebida: o `play_count` incrementava
+com `WHEN EXCLUDED.finished AND NOT playback_state.finished`. Com o `finished`
+grudando, essa condição nunca mais seria verdadeira — o contador congelaria em 1
+para sempre, **levando junto o bônus de reassistir do M5** (§8f), que é o sinal
+positivo mais forte que o perfil de gosto tem. Consertar metade teria trocado um
+bug visível por um invisível.
+
+Agora quem decide o incremento é a **posição guardada**: conta como exibição
+nova quem chega ao fim vindo de um ponto que ainda não estava no fim. Isso
+resolve o congelamento e, de brinde, o outro erro que a condição antiga
+escondia — sem ele, cada heartbeat depois dos 92% somaria um.
+
+### O passado era recuperável, e por um motivo desenhado no M0
+
+`playback_state` é, nas palavras do §8, *"só um cache derivado"* — e o
+`play_event` **nunca é sobrescrito**. Então a migração `0018` reconstrói o campo
+a partir do log, com a regra do §8f (evento `finish` **ou** mais de 92%), que é
+a mesma que a curadoria e o guia usam. A decisão de guardar o log cru desde o M0
+paga aqui pela terceira vez.
+
+A migração **só liga** o `finished`, nunca desliga. Se alguma linha estiver
+marcada sem que o log comprove, quem está incompleto é o log — eventos podem
+ter se perdido, e apagar a marca destruiria informação que não volta.
+
+### Verificação
+
+O upsert foi exercitado com o SQL exato do handler, contra a linha real, **dentro
+de uma transação desfeita no fim** — testar exclusão e sobrescrita no acervo de
+alguém não é opção (é a mesma postura da §22):
+
+| passo | esperado | resultado |
+|---|---|---|
+| reabriu no minuto 30 | `finished` continua `true`, `play_count` 1 | ✅ |
+| reassistiu até o fim | `play_count` 1 → 2 | ✅ |
+| heartbeat ainda no fim | `play_count` **continua** 2 | ✅ |
+| depois do `ROLLBACK` | linha idêntica à de antes | ✅ |
+
+E o efeito nas telas, depois da migração: `/api/library` voltou a reportar
+`finished_count` (duas entradas — *Cassino Royale* e *As Visões da Raven*), e o
+selo "visto" voltou ao cartão da filmografia no guia. Ele convive com a barra de
+progresso e os dois dizem coisas diferentes de propósito: o selo é histórico
+("já terminei alguma vez"), a barra é o agora ("estou em 20% de uma revisão").
+
+### A armadilha do §11, pela terceira vez
+
+A migração não aplicou na primeira tentativa. `sqlx::migrate!` embute o
+diretório em tempo de compilação e o `cargo watch` observa `src/`, não
+`migrations/` — o binário tinha recompilado por causa do `works.rs` **antes** de
+o `.sql` existir, e subiu dizendo "migrations em dia" sem aplicar nada. Um
+`touch` em qualquer `.rs` resolve.
+
+Está registrado no §11 e na R16, e mordeu de novo assim mesmo. Fica a nota
+prática: ao acrescentar migração, o `.rs` tem que ser tocado **depois** do
+`.sql`, não antes.
+
+## 32. Curiosidades — e de onde elas podem vir
+
+> **Revisto em 03/08/2026, parcialmente.** As curiosidades entregues aqui e no
+> §33 foram **aprovadas e ficam como estão**.
+>
+> O que mudou é a regra: a recusa de LLM registrada nesta seção continua
+> valendo para **fato sobre filme**, mas **foi levantada para conteúdo
+> editorial** — o guia dinâmico e os eventos temáticos podem ser escritos por
+> LLM, com os fatos vindo do banco e o texto marcado como gerado.
+>
+> Ver `IDEIAS.md` §2.3.
+
+Pedido: "curiosidades sobre o filme para a pessoa aprender/se entreter", dentro
+da ficha. A parte difícil não foi a tela — foi a **fonte**.
+
+### Três fontes descartadas, e a regra que as descartou
+
+| fonte | por que não |
+|---|---|
+| TMDB / AniList | **não têm trivia.** O que devolvem é ficha: título, sinopse, ano, gênero, elenco |
+| Wikipédia / Wikidata | tem, mas é texto solto, com licença e uma dependência de rede nova por obra |
+| **um LLM gerando** | inventa com confiança — e é exatamente o que o §18 proíbe |
+
+A terceira é a tentação de 2026 e é a pior. O §18 já fixou a regra ao recusar
+chutar "inglês" para uma legenda sem sufixo: **não se inventa metadado**. Uma
+curiosidade falsa sobre um filme que a pessoa ama é pior que nenhuma, e ela
+chega com a mesma cara de verdade que as outras.
+
+### A fonte que sobrou é a melhor: o próprio grafo
+
+Curiosidade sobre o filme qualquer site tem. Curiosidade sobre **o seu acervo** e
+**o seu histórico com aquele filme** só este servidor pode dar — é o argumento da
+R18 (§30) uma camada abaixo, e sai de graça de `credit`, `work_tag`,
+`media_file` e `playback_state`.
+
+Sete consultas, cada uma com um limiar. Medido em *007: Cassino Royale*:
+
+```
+✦ De Martin Campbell você também tem 007 Contra GoldenEye.
+♪ A trilha é de David Arnold, que assina outras 19 obras do seu acervo.
+◎ Daniel Craig e Jeffrey Wright também dividem a tela em 007: Quantum of Solace (2008).
+● Você já viu este filme inteiro.
+```
+
+O reencontro de elenco é a que mais parece curiosidade — e ela é **impossível
+sem a deduplicação por `provider_key` do §8h**: sem aquilo, "Daniel Craig" seria
+uma linha por filme e nunca cruzaria com nada.
+
+### Só nasce se for notável
+
+Uma curiosidade que vale pra toda obra não é curiosidade. Então cada consulta
+tem um limiar, e quando ele não é atingido a linha **não existe** — não vira
+"informação indisponível". É o §24 aplicado a entretenimento.
+
+Na mesma ficha acima, duas não dispararam e é o comportamento certo: gênero
+(Ação tem 200 filmes no acervo — não é raridade) e duração (145 min, com 56
+filmes mais longos). A seção inteira some quando a obra não rende nada.
+
+### O defeito que a verificação achou: "você também tem 1408"
+
+Na ficha de *1408*, a rota dizia *"De Mikael Håfström você também tem 1408"* e
+*"John Cusack e Mary McCormack também dividem a tela em 1408"*.
+
+Estava tecnicamente certa: são **duas linhas em `work`** com o mesmo
+`{"tmdb": "3021"}`, uma `auto` e outra `confirmed` — o mesmo filme, dois
+arquivos. O acervo tem **6 grupos assim**.
+
+`media_file.path` é UNIQUE, mas nada impede duas obras com o mesmo título — e o
+§8b até favorece isso, porque o matcher nunca sobrescreve o que um humano
+confirmou. A comparação certa não é `w2.id <> w.id`, é pelo **id do provider**,
+que é quem responde "é o mesmo filme?". Virou a constante `OUTRA_OBRA`, usada
+pelas três consultas que dizem "você também tem".
+
+### Detalhes de apresentação
+
+- **A frase é montada no servidor**, como os `reasons` do score do §8b. Montá-la
+  no cliente seria uma segunda gramática pra manter.
+- **Buscada depois do cartaz**, em rota própria: são sete consultas e a sinopse
+  não espera por elas. Enquanto não chegam não há esqueleto nem "carregando" —
+  um bloco cinza piscando por 200ms no meio da leitura é pior que a seção
+  aparecer quando estiver pronta.
+- **Símbolos de texto, não emoji.** `✦ ♪ ◎ ●` e não 🎬 — o Odeon é preto, âmbar e
+  a cor da obra, e emoji colorido rompe isso. Mesma razão pela qual a marca é `◉`.
+- **A linha sobre você é a única em âmbar**, e vem por último: a leitura começa
+  na obra e termina em quem está lendo.
+
+### A aba virou "wiki"
+
+Mudança de nome pedida, e ela é só a etiqueta: o componente continua `Guia.tsx`
+e as rotas continuam `/api/guia`. Renomear o interno seria churn sem ganho —
+mas fica registrado aqui pra ninguém procurar um `Wiki.tsx` que não existe.
+
+### Verificação
+
+Contra o acervo real, com Firefox por Marionette:
+
+| | |
+|---|---|
+| `/api/works/{id}/curiosidades` | 0,19–0,23 s em quatro filmes |
+| *Cassino Royale* | 4 curiosidades, incluindo a de reencontro |
+| *Corra!* | *"Bradley Whitford e Stephen Root também dividem a tela em O Homem Bicentenário (1999)"* |
+| *1408*, depois do conserto | não fala mais de si mesmo |
+| *Drive* | uma só — *"você parou faltando 39 minutos"* — e é o esperado |
+| a seção na tela | entre a sinopse e o elenco, com a linha de "você" em âmbar |
+
+## 33. A curiosidade sobre o FILME — Wikidata e Wikipédia
+
+Correção de rumo, e a mais direta até aqui. O §32 entregou curiosidades tiradas
+do próprio acervo ("de Martin Campbell você também tem…") e elas são boas — mas
+não são o que alguém quer dizer com *curiosidade sobre o filme*. Aquilo fala da
+sua estante; o pedido era falar da obra.
+
+### A fonte que eu tinha descartado rápido demais
+
+O §32 descartou três fontes e ficou com o grafo. Revisitando, uma quarta não
+tinha sido considerada, e é a resposta:
+
+| fonte | veredito |
+|---|---|
+| TMDB / AniList | continua sem trivia — devolvem ficha |
+| **Wikidata** | **é a resposta**: estruturado, CC0, casa pelo id do TMDB |
+| Wikipédia | prosa de verdade, CC BY-SA — exige crédito e link |
+| um LLM gerando | continua fora, e o §18 continua sendo a razão |
+
+**Por que o Wikidata resolve o que a Wikipédia sozinha não resolvia.** A
+propriedade `P4947` é o id do filme no TMDB — o mesmo que o Odeon guarda em
+`work.external_ids` desde o M1. O casamento é **exato**: nada de buscar por
+título e desempatar por ano. É o princípio do `provider_key` do §8h, e é o que
+separa isto do casamento conservador da grade ao vivo (§17), que precisa recusar
+734 títulos ambíguos justamente por não ter um id.
+
+Medido em 12 filmes sorteados do acervo: **12 de 12 casaram.** E o mesmo
+Wikidata devolve o link do artigo da Wikipédia por sitelink, então nem o título
+do artigo é adivinhado.
+
+### O resultado, em dois filmes reais
+
+```
+Pulp Fiction
+  ★ Ganhou o BAFTA de melhor roteiro original — e mais 22 prêmios.
+  $ Custou US$ 8 milhões e arrecadou US$ 108 milhões — 13 vezes o que custou.
+  ⌖ Foi filmado em Los Angeles, Tennessee.
+  ❝ A filmagem começou em 20 de setembro de 1993, tendo como locações
+    diversos pontos de Los Angeles e arredores.            [Wikipédia]
+
+007: Cassino Royale
+  ❝ A EON Productions conseguiu os direitos para Casino Royale em 1999,
+    depois da Sony Pictures tê-los trocado com a Metro-Goldwyn-Mayer
+    pelos direitos de Spider-Man.                          [Wikipédia]
+```
+
+A última linha é o tipo de coisa que o pedido descrevia, e ela vem da seção
+"Produção" do artigo — cortada **em fim de frase**, nunca por contagem de
+caracteres: texto truncado no meio de uma palavra lê como defeito de
+renderização, que é a mesma correção da §21 no verso da caixa.
+
+### Cinco defeitos que só a verificação achou
+
+1. **"Ganhou o premiados com o BAFTA de melhor roteiro original."** O rótulo em
+   português do Wikidata muitas vezes é o nome de uma **categoria** da
+   Wikipédia, não do prêmio. As cascas conhecidas são retiradas.
+2. **"national Board of Review"**, com N minúsculo. Eu tinha escrito uma função
+   que rebaixava a inicial pra encaixar no meio da frase — e não há como
+   distinguir nome próprio de substantivo comum sem saber o que a palavra é. A
+   função foi apagada; a capitalização fica como veio.
+3. **"É uma adaptação de Drive"**, na ficha de *Drive*. O livro tem o mesmo
+   nome, e é isso que a frase deve dizer: *"da obra homônima"*.
+4. **Três parágrafos colados num bloco só.** O `extract` da Wikipédia separa
+   parágrafos com **um** `\n`, não dois.
+5. **O link do Wikidata apontava para uma busca** (`Special:Search?search=680`),
+   que procura o texto "680" e não acha filme nenhum. Agora aponta para a
+   entidade. Link de conferência que não confere é pior que link nenhum — a
+   mesma exigência que o §8b faz do score.
+
+### Duas decisões de honestidade
+
+**Moeda é obrigatória.** `wdt:P2130` devolve o número **sem** a moeda, e
+escrever "US$" num orçamento em euros é a mentira com cara de metadado que o
+§18 proíbe. A moeda vem pelo caminho completo do statement (`psv:`), e valor em
+moeda que não sabemos nomear simplesmente **não vira curiosidade**.
+
+**Prêmio de prestígio é escolhido, o resto é contado.** 23 linhas de prêmio não
+é curiosidade, é currículo. Sem uma lista de prestígio, a manchete de *Pulp
+Fiction* seria o Dallas-Fort Worth Film Critics Association Award.
+
+### Cache, e por que ele é parte do desenho
+
+`work_trivia` (migração 0019) guarda o resultado por 30 dias. Três razões, e as
+três são regras que este projeto já segue:
+
+1. **A ficha não pode depender da rede** — abrir uma obra faria duas chamadas
+   externas toda vez;
+2. **educação com serviço alheio** — o SPARQL do Wikidata é público e gratuito;
+3. **a biblioteca continua funcionando offline**, que é por que artwork e
+   retratos moram em disco desde o M1.
+
+Duas sutilezas: **lista vazia é guardada** (senão todo filme sem entrada seria
+reconsultado para sempre), mas **falha de rede não é** — gravar o vazio ali
+esconderia a trivia por 30 dias por causa de um segundo ruim.
+
+E nada disso derruba a rota: sem rede, as curiosidades do acervo aparecem
+sozinhas. Mesma postura do §17 com a arte do programa — o que falta some, o que
+existe fica.
+
+### Verificação
+
+| | |
+|---|---|
+| primeira busca | 0,7 – 1,6 s |
+| **segunda (cache)** | **0,25 s** |
+| cobertura no Wikidata | 12 de 12 filmes sorteados |
+| testes de unidade | 5, cobrindo moeda, corte de frase, casca de prêmio e desambiguador |
+| na tela | fatos do filme primeiro, com crédito; o parágrafo da Wikipédia recuado como citação; os do acervo depois |
+
+O que ficou de fora aqui: **aquecer o cache do acervo inteiro**. A trivia chega
+quando alguém abre a ficha, e o primeiro a abrir cada filme paga 1,5 s — 548
+vezes, uma pessoa de cada vez. Feito logo depois, e não na R22 como esta seção
+previa: ver a §34.
+
+## 34. O aquecimento do cache de trivia, e duas lições sobre serviço alheio
+
+A §33 deixou registrado que a trivia chegava quando alguém abria a ficha, e que
+aquecer o acervo inteiro ficaria para depois. "Depois" foi agora, e o caminho
+até 92,7% de cobertura passou por três defeitos — dois deles da mesma família e
+o do meio, o pior, **silencioso**.
+
+### Nasceu como `job`, e isso se pagou no mesmo dia
+
+548 filmes com duas chamadas externas cada não cabem numa requisição HTTP. O §12
+já tinha registrado o preço de operações longas viverem na memória do processo, e
+o §21 já tinha marcado os reparos síncronos como dívida — então esta rota nasceu
+como `job`: estado no banco, progresso visível, cancelamento cooperativo,
+retomável pelo `WHERE`.
+
+Não foi cerimônia. Durante a execução o `cargo watch` reiniciou o binário
+**quatro vezes** (o `backend/src` estava sendo editado em paralelo), e as quatro
+viraram `interrupted` com o progresso preservado. Cada retomada pegou só o que
+faltava — 173, depois 123, depois 48, depois 23. Um script síncrono teria
+recomeçado do zero quatro vezes, ou pior, teria ficado sem saber o que já fez.
+
+**Custou uma migração:** `job.kind` tem CHECK com a lista de tipos, e `trivia`
+não estava nela (0020). O sintoma foi pior que o erro — `Job::start` devolve
+`None` tanto para "já existe um ativo" quanto para "o INSERT falhou", então a
+rota respondia *"já há um aquecimento em andamento"* quando nunca houvera
+nenhum. Erro disfarçado de estado normal, que é o §8b ao contrário. A rota agora
+pergunta ao banco antes de afirmar.
+
+### Lição 1: a correção para 429 não é esperar mais, é perguntar menos vezes
+
+A primeira execução consultava **um filme por requisição**, com 250 ms de pausa.
+Resultado medido: **513 falhas em 547**, todas iguais —
+
+```
+429 Please respect our robots policy and limit your requests to 1 RPS
+```
+
+O serviço diz a regra na própria resposta. E a saída óbvia — aumentar a pausa —
+seria a pior das duas: 547 requisições continuam sendo 547 requisições.
+
+O SPARQL aceita `VALUES` com uma lista de ids, e o acervo inteiro cabe em **22
+consultas**. Ficou mais rápido *e* muito mais educado com um serviço público e
+gratuito. Resultado: 513 filmes em menos de um minuto, **zero falhas**.
+
+Junto vieram o recuo exponencial no 429 e um User-Agent que diz o que o programa
+é — `Odeon/0.1` sozinho não identifica nada, e a política da Wikimedia pede isso.
+
+### Lição 2: 200 não quer dizer que veio o que se pediu
+
+Com o Wikidata resolvido, o número que não fechava era outro: **14 parágrafos de
+produção em 548 filmes**. Baixo demais para ser verdade.
+
+A causa estava na resposta, num campo que eu não lia:
+
+```
+"exlimit" was too large for a whole article extracts request, lowered to 1.
+```
+
+Extrato de artigo **inteiro** é um por requisição — `exlimit` só passa de 1 para
+extratos de introdução, e a introdução não tem seção de produção. Eu pedia 20
+títulos, recebia 20 páginas, **e só a primeira trazia texto**. As outras 19
+voltavam sem `extract`, com HTTP 200 e sem erro nenhum.
+
+É a §R6d de novo, com outra roupa: *verificar o mecanismo não é verificar o
+resultado*. Lá a classe `.idle` entrava e a barra continuava na tela; aqui a
+requisição respondia 200 e o texto não vinha.
+
+### E a mesma pedra, na Wikipédia
+
+Corrigido para uma requisição por artigo, o número subiu de 14 para… 14. Porque
+500 requisições a 120 ms tropeçaram no **429 da Wikipédia** — e o meu código
+tratava erro de rede como "não tem parágrafo", em silêncio.
+
+Duas correções, e a segunda importa mais:
+
+1. um segundo entre artigos, com recuo e retentativa;
+2. **falha contada, não engolida.** É o silêncio que faz um defeito destes
+   sobreviver: o job terminava anunciando "0 falhas" com quase nada gravado.
+
+### O resultado
+
+| | |
+|---|---|
+| filmes no cache | **548 de 548** |
+| com ao menos uma curiosidade | **508 — 92,7%** |
+| curiosidades gravadas | **1.694** |
+| fotografia · locação · dinheiro | 433 · 368 · 304 |
+| **produção (prosa da Wikipédia)** | **232** — eram 14 |
+| adaptação · prêmios | 215 · 142 |
+
+Os 40 filmes sem nada estão gravados como lista vazia de propósito: "procurei e
+não há" é resposta, e sem ela cada abertura de ficha reconsultaria o serviço.
+
+### O que fica de dívida
+
+O aquecimento é manual (`POST /api/maintenance/aquecer-trivia`). Filme novo
+identificado depois disto busca sob demanda na primeira abertura da ficha, que é
+o comportamento da §33 e continua correto — mas o natural é encadear o
+aquecimento ao fim da identificação, como `?then=match` faz com a varredura
+(§12). Não foi feito aqui porque encadear operação de rede a um job que já é
+longo merece a sua própria decisão.
+
+## 35. R19 — o círculo e a fita
+
+> **Revisto em 03/08/2026, em dois pontos, e são os dois maiores desvios da
+> série.**
+>
+> **1. O círculo nunca foi pedido.** Ele foi inventado no documento de ideias
+> anterior e virou peça de schema aqui, escopando empréstimo, rotação, notas,
+> feed, convite e acesso. A palavra usada por quem decide é **amigos** — que é
+> outra coisa: relação entre duas pessoas, cada um com a sua lista, sem grupo.
+> A locadora e o estoque são **do servidor**.
+>
+> **Desfeito na R28 (§44):** o círculo saiu do schema, a escassez virou uma cópia
+> por caixa no servidor, e a amizade nasceu no lugar dele.
+>
+> **Desfeito na R30 (§46), e a recusa era de modelagem.** A fita virou um
+> objeto próprio, separado do `playback_state` de qualquer pessoa — então
+> rebobinar deixou de apagar o "continuar de onde parou" de alguém e passou a
+> mexer só no objeto. Rebobinar a fita de outra pessoa é obrigatório, e ninguém
+> perde nada com isso.
+>
+> **2. A recusa de rebobinar a fita de outra pessoa mata a ideia.** Esta seção
+> chama isso de "ação destrutiva entre usuários" e limita o rebobinar à própria
+> posição. **O atrito entre as pessoas é justamente a graça**: você põe pra
+> tocar, descobre que alguém devolveu no minuto 47, e tem que rebobinar
+> esperando alguns segundos. E existe log de quem devolve certo e quem devolve
+> zoado.
+>
+> Ver `IDEIAS.md` §2.1 e §3.9.
+
+A locadora da R8 (§20) era uma **vitrine**: 600 caixas lindas, estado nenhum.
+Nada do que se fazia lá deixava marca, e voltar amanhã encontrava exatamente a
+mesma loja. Esta fase deu a ela as duas coisas que faltavam pra ser um lugar:
+**alguém está com a fita**, e **ela volta em algum estado**.
+
+### O círculo, e por que ele virou peça de schema
+
+"A casa" nunca foi conceito do banco — era `SELECT * FROM app_user`. O círculo
+entrou porque resolve três coisas de uma vez, e nenhuma delas é organizacional:
+
+**1. Torna a escassez honesta.** "Este DVD está alugado" é falso quando o
+arquivo está sempre lá, e o §18 proíbe dizer coisa falsa com cara de metadado.
+Dentro de um círculo deixa de ser falso: a fita **está** com outra pessoa, e é
+essa pessoa que está te barrando, não o software. O Odeon não vira DRM de
+mentirinha — vira o balcão que informa quem levou.
+
+**2. Dá saída ao bloqueio.** Um bloqueio sem saída é parede. Um que diz *"rudney
+está com esta há 3 dias"* tem porta, e é ela que faz a coisa ser um lugar em vez
+de um sistema: **pedir de volta**.
+
+**3. Escopa tudo que vem depois.** Empréstimo, rotação (R20), retrospectiva
+(R24) e feed (R25) são todos por círculo. Adotá-lo agora custou uma coluna e
+evitou uma migração dolorosa — a mesma jogada do `programme.work_id` do §17.
+
+A casa virou o primeiro círculo, com os 2 usuários que já existiam.
+
+### A tabela que não nasceu
+
+O plano previa `exemplar`: uma cópia de uma caixa dentro de um círculo. Medido
+antes de escrever — **746 caixas com pôster** (114 séries + 632 avulsas) — e a
+decisão de **uma cópia por caixa** transformaria isso em 746 linhas dizendo
+todas `copias = 1`.
+
+Uma tabela cujas linhas não carregam informação é enfeite de schema. A escassez
+de uma cópia virou um **índice único parcial** sobre o empréstimo em aberto:
+
+```sql
+CREATE UNIQUE INDEX emprestimo_uma_copia_work_idx
+    ON emprestimo (circulo_id, work_id)
+    WHERE devolvido_em IS NULL AND work_id IS NOT NULL;
+```
+
+Duas linhas de DDL no lugar de uma tabela e de uma checagem no código — e quem
+recusa o segundo aluguel passa a ser o banco, sem corrida entre conferir e
+inserir. É o argumento do §5 pra `CHECK` em vez de validação na aplicação, e
+este é o primeiro código do projeto onde duas pessoas disputam a mesma linha de
+propósito. O dia em que uma caixa precisar de duas cópias, `exemplar` nasce
+carregando informação de verdade.
+
+### A condição da fita já estava no banco
+
+Este é o achado que sustenta a fase inteira. `playback_state` guarda, por
+usuário e por obra, onde a pessoa parou. **Quem assistiu até o minuto 47 e
+devolveu deixou a fita no minuto 47** — isso é literalmente verdade, não
+simulação.
+
+| na loja | no banco |
+|---|---|
+| voltou rebobinada | `position_seconds = 0` |
+| voltou no meio | `position_seconds > 0` |
+| voltou até o fim | a regra do §8f: `finished` **ou** passou de 92% |
+| quem deixou assim | `playback_state.user_id` |
+
+Uma condição de fita sorteada seria enfeite. Uma que é o progresso real de
+outra pessoa da casa é **informação vestida de objeto** — que é a definição do
+quarto pilar. Conferido nos três casos com dado real do acervo: *Drive* voltou
+`no-meio` (60,9%), *Cassino Royale* `terminada`, *Avatar* `rebobinada`.
+
+**O que é congelado, e por quê.** `devolvido_como` é gravado no instante da
+devolução em vez de derivado na hora de exibir. Quem devolveu pode reassistir
+amanhã, e aí "voltou no meio" já teria sido reescrito por um progresso
+posterior. O histórico não pode depender do presente de outra pessoa.
+
+E o 0.92 não é literal novo: é o mesmo §8f que a curadoria e o guia usam. Um
+número solto aqui faria três telas do mesmo produto discordarem sobre a palavra
+"terminada" — o defeito exato que a R18 desenterrou (§30). Há teste pra isso.
+
+### Até onde o bloqueio vale
+
+**Decidido: o empréstimo barra dentro da locadora. A biblioteca, a busca e o
+`▸ assistir` continuam abertos.**
+
+É decisão, não omissão. Barrar o player transformaria um membro em porteiro do
+servidor do outro, e trancaria o dono fora do próprio arquivo — que é o cenário
+que o §22 chama de regra inventada. A locadora é um lugar com regra; o disco
+continua sendo seu. A escassez é honesta porque é social, e escassez social se
+resolve socialmente: pedindo de volta.
+
+A caixa alugada **continua clicável** pela mesma razão. É abrindo que se
+descobre com quem ela está e que dá pra pedir. Uma caixa que não responde ao
+clique seria a parede que o círculo existe pra evitar.
+
+### O impasse, e a válvula da válvula
+
+Bloqueio de verdade tem uma falha de modo que "compromisso visível" não tinha:
+**quem esquece de devolver tranca a outra pessoa pra sempre.** Numa casa isso se
+resolve gritando pelo corredor; num círculo, não. E a solução já era parte do
+tema, o que é um bom sinal: **uma locadora tem prazo.** Vencido, a fita volta
+sozinha.
+
+A varredura roda **na leitura da prateleira**, não num daemon. É o padrão da
+emissora (§25), que programa três canais sem tabela e sem job: quando a resposta
+é calculável na hora, um processo de fundo é uma peça a mais pra quebrar.
+
+E a válvula tem uma válvula: **o prazo não interrompe quem está assistindo.**
+Fita que vence às 21h04 com a pessoa no minuto 40 devolve quando a sessão
+acabar. Não é gentileza — é a mesma escolha do cancelamento cooperativo do §12,
+que espera o ponto seguro em vez de matar no meio. E "a sessão acabou" tem sinal
+real, não suposição: o heartbeat de 10 s do player parar de chegar. Conferido
+nos dois sentidos — com heartbeat de 0 s a fita vencida **fica**; com 3 minutos
+ela volta, marcada `devolvido_por = 'prazo'` e `atrasada`.
+
+**Pedir de volta não encurta prazo de ninguém.** É registro e aviso. Dar a um
+membro poder sobre o prazo do outro transformaria a locadora em disputa — e a
+decisão de barrar só é defensável porque a escassez é social.
+
+### Rebobinar, e o formato que virou comportamento
+
+**Só em VHS.** O DVD não rebobina — ele lembra onde parou, e é por isso que ele
+tem menu. A diferença que a R8 usou só como estética (lombada de papel contra
+lombada de plástico) virou **comportamento**: o backend recusa com *"isto é um
+DVD — ele não rebobina, ele lembra onde parou"*.
+
+**Só a sua própria posição.** A ideia original previa rebobinar a fita de outra
+pessoa, o que seria a primeira ação destrutiva entre usuários deste projeto. A
+locadora não precisa disso: quem devolve rebobina, e quem não rebobinou fica
+registrado no empréstimo. O fato social é guardado sem que ninguém possa apagar
+o progresso alheio.
+
+**`finished` não é tocado**, e a omissão é deliberada. Ele virou acumulativo na
+§31 justamente por responder *"você já terminou isto alguma vez?"* — pergunta
+sobre o passado, que rebobinar não desfaz. Rebobinar apaga onde a fita está,
+não o que já aconteceu.
+
+E o gesto é destrutivo, então a regra do §22 vale inteira: **o botão diz o que
+apaga, antes.** A confirmação nomeia o minuto — *"A fita está em 0:47:00.
+Rebobinar apaga o 'continuar de onde parou'"* — e a animação mostra o ponteiro
+voltando de 47:00 a 0:00, no tempo. O contador não reusa o `duracao()` da ficha
+de propósito: aquele arredonda pra "2h14", e um contador que pula de 47min pra
+46min não parece rebobinar.
+
+### Duas colisões de nome que a fase criou
+
+Palavras que eram livres deixaram de ser no instante em que a devolução virou
+fato, e as duas teriam ficado mentindo em silêncio:
+
+- **A estante "Devoluções"** mostrava "continuar assistindo". Agora existe uma
+  pilha de fitas que voltaram de verdade — então ela devolveu o nome e virou
+  **"Começadas"**. Duas coisas diferentes não podem ter a mesma placa.
+- **O botão "devolver à estante"** só fechava o palco. Com um `devolver` de
+  verdade do lado, virou **"voltar à estante"**.
+
+### Um número que mudou de lado
+
+`ULTIMO_ANO_VHS` era constante do `Locadora.tsx`. Deixou de ser quando o mesmo
+1996 passou a decidir se uma caixa rebobina: agora ele mora no backend e é
+servido em `prateleira.ultimo_ano_vhs`. É a lição do §30 aplicada antes de doer
+— só que o sintoma teria sido pior que o botão que dizia "ver as 644": uma caixa
+desenhada como VHS que recusa o rebobinar.
+
+### O buraco que a migração deixaria
+
+A 0021 semeou os usuários que existiam. Um usuário criado **depois** abriria a
+locadora e receberia 403 — a tela inteira quebrada por uma linha que ninguém
+sabia que precisava existir. Enquanto a decisão for "só a casa por enquanto",
+**estar no servidor é estar nela**, e o schema não deve discordar: quem chega
+sem círculo entra no mais antigo. O dia em que houver convite, esse `INSERT`
+sai e o convite entra no lugar.
+
+### Dois defeitos que só a tela mostrou
+
+1. **A cinta sumia na caixa grande.** A faixa de papel com o nome de quem
+   levou existia só na estante — pegar uma caixa alugada fazia a marca
+   desaparecer justo quando ela vira o objeto principal da tela, e a caixa na
+   mão passava a parecer disponível.
+2. **O botão oferecia rebobinar uma fita já rebobinada.** `caixa.posicao` vem
+   da estante, e a estante só recarrega na próxima visita — o balcão recarrega,
+   as 746 caixas não. A posição virou estado local do palco.
+
+E uma escolha de apresentação que veio junto: na mão, a capa **não** escurece
+como escurece na estante. Ali a caixa é o objeto principal, e uma capa apagada
+lê como "carregando" em vez de "está fora". A cinta já diz isso, e diz melhor.
+
+### Verificação
+
+Contra o acervo real, com Firefox por Marionette (o método do §23) e com dois
+usuários de verdade — sam e rudney:
+
+| | |
+|---|---|
+| migração `0021` | aplicada; "A casa" criada com os 2 membros |
+| escassez | rudney pegou *Drive*; sam recebeu **403 "rudney está com esta"** |
+| limite | 4ª caixa recusada: *"você já está com 3 — devolva uma antes de pegar outra"* |
+| condição | `no-meio` · `terminada` · `rebobinada`, os três derivados de `playback_state` real |
+| caixa de série | *As Visões da Raven* devolveu `terminada`, pelo último episódio mexido |
+| pedir de volta | 200 com `{"pedido_a":"sam"}`; segundo pedido e auto-pedido recusados |
+| prazo | fita vencida de rudney voltou sozinha, `prazo` + `atrasada` |
+| **a válvula** | com heartbeat de 0 s a fita vencida **fica**; com 3 min ela volta |
+| rebobinar | DVD recusado; VHS zerou 1 linha, e `finished` não foi tocado |
+| na tela | balcão, cintas, "pegar emprestado", "pedir de volta", devolver, confirmação e ponteiro |
+| a 760px | nada estoura na horizontal |
+| testes | **170 passam**, 5 novos |
+
+O que ficou de fora, e é o próximo: **a prateleira finita e a rotação por
+círculo** (R20). Hoje a loja continua mostrando as 600 caixas de uma vez, que é
+a parede que a R8 deixou aberta — e agora que o círculo existe, o hash da
+emissora (§25) só precisa dele no lugar do dia.
+
+E uma dívida nova, pequena e registrada: o balcão do círculo **não tem tela de
+administração**. Prazo e limite moram em colunas de `circulo` com padrão 7 e 3,
+e mudá-los é `UPDATE`. Vira formulário quando houver um segundo círculo pra
+querer números diferentes — antes disso seria tela pra ninguém.
+
+## 36. R20 — a prateleira finita, e a loja que vira na segunda
+
+> **Revisto em 03/08/2026.** A rotação é **estoque de loja**, e escasso: cerca
+> de **40 caixas na loja inteira** — não 16 por estante, 166 no total. O que não
+> está no estoque não existe até o estoque virar.
+>
+> E os números (tamanho do estoque, prazo, limite por pessoa, escassez ligada ou
+> não) são pra ser **opções no menu do servidor**, não constantes de binário.
+>
+> O círculo sai do hash da rotação junto com o resto — ver §35, e §44 pra o que
+> foi feito: a semente é só a semana, e a vitrine passou a ser a mesma pra todo
+> mundo.
+>
+> **Refeito na R29 (§45):** o corte deixou de ser por estante — 40 caixas na loja
+> inteira, sorteadas de uma vez —, a caixa alugada some da prateleira, e os
+> quatro números ganharam tela na aba `admin`.
+>
+> Ver `IDEIAS.md` §3.2.
+
+A R8 (§20) deixou um problema aberto e a R19 (§35) o deixou maior: a locadora
+mostrava **600 caixas de uma vez**. Seiscentas caixas não são uma loja, são uma
+parede — e uma parede é o oposto de curadoria por restrição, que é o terceiro
+pilar. Um limite de três empréstimos por pessoa não faz ninguém escolher nada se
+a prateleira for infinita.
+
+### O truque já existia, e é o da emissora
+
+A grade dos três canais da casa (§25) é `md5(dia || canal || id)` calculada no
+banco: sem tabela, sem daemon, determinística. **A rotação da locadora é o mesmo
+truque com a semana no lugar do dia, e o círculo junto:**
+
+```sql
+row_number() OVER (PARTITION BY estante ORDER BY md5($semente || id::text))
+-- semente = segunda-feira || circulo_id
+```
+
+Duas visitas na mesma semana veem a mesma loja, em qualquer aparelho, sem nada
+pra sincronizar nem pra expirar. Segunda-feira a estante vira sozinha. Medido:
+duas leituras seguidas devolveram a **mesma assinatura**, e trocando só o
+círculo, **0 de 16** caixas coincidiram.
+
+**E é aqui que o círculo ganha razão de existir antes de haver empréstimo
+nenhum:** entrar num círculo novo é entrar numa locadora que tem outro acervo na
+vitrine.
+
+**A semana começa na segunda, e na meia-noite local.** Não é "sete dias desde
+que você entrou": uma janela deslizante por usuário faria duas pessoas do mesmo
+círculo verem lojas diferentes no mesmo dia, que é o oposto do que a rotação por
+círculo existe pra fazer. O fuso vem do mesmo `deslocamento()` da emissora, que
+virou público por isso — duas leituras de fuso divergindo fariam a loja virar
+num horário e a grade noutro.
+
+### O corte, e de onde saiu o número
+
+**16 caixas por estante.** Medido na própria tela: a caixa tem 130px e a
+fileira 26px de intervalo, e uma estante de largura cheia mostra pouco mais de
+oito. Dezesseis são **duas telas** — uma estante que se percorre com um gesto,
+não um corredor. O resultado: de 600 caixas, **166 expostas**.
+
+### As estantes mudaram de lado, e não foi arrumação
+
+`ESTANTES` — quais gêneros formam qual estante, e em que ordem elas reivindicam
+os títulos — era uma constante do `Locadora.tsx`. Foi pro backend por uma razão
+de **correção**:
+
+> a rotação corta cada estante em 16, e o corte tem que acontecer **depois** de
+> cada título ser reivindicado por uma estante só.
+
+Cortando no cliente, um título eliminado da estante que o reivindicou não
+reaparece na seguinte — ele simplesmente some da loja. Reivindicar e cortar são
+a mesma decisão, e decisão só pode morar num lugar.
+
+De brinde, **uma requisição no lugar de doze**: a tela pedia `/api/library` uma
+vez por estante e juntava as respostas. Agora é `GET /api/locadora/estantes`,
+uma consulta, **0,32 s**. É o mesmo movimento que o guia fez em §30 ("uma
+requisição e não seis") — e as duas vezes a economia foi consequência, não
+motivo: a razão foi a decisão ter dono.
+
+### A placa diz "16 de 113"
+
+Um número que esconde o total é o "Biblioteca 300" que a R3 (§14) corrigiu: sem
+o segundo número, a pessoa conclui que a loja tem 16 filmes de terror. E quando
+tudo cabe na estante o "de" some — dizer *"3 de 3"* é ruído. O cabeçalho faz o
+mesmo em cima: *"166 caixas na vitrine desta semana, de 600 nas estantes"*.
+
+**E a vitrine diz quando vira.** *"vira amanhã"*, *"vira segunda"*. Sem essa
+linha a rotação leria como sorteio, e uma caixa que sumiu leria como defeito —
+a promessa é o que separa uma vitrine de um bug.
+
+### O defeito que a rotação criou, e que só apareceu ao juntá-la com a R19
+
+Uma caixa emprestada aparecia na tela como **cinta sobre a caixa da estante**.
+Isso funcionava enquanto a estante tinha tudo. A partir do momento em que ela
+mostra 16 de 113, a fita que rudney levou pode simplesmente **não estar exposta
+esta semana** — e some da tela. Com ela some o "pedir de volta", que é a única
+saída do bloqueio da R19. O bloqueio voltaria a ser parede, por um caminho que
+nenhuma das duas fases teria produzido sozinha.
+
+A correção é o que uma locadora sempre teve: **o balcão mostra o que está
+fora.** A estante "Em mãos" vem antes da vitrine, independente da rotação, e é
+por ela que a caixa continua alcançável. Custou três colunas na resposta do
+empréstimo — arte, cor e ano — porque uma caixa desenhada fora da estante
+precisa de capa. A da série desce até um episódio pra achar pôster, já que a
+coleção-série costuma vir sem arte própria.
+
+### O que a rotação **não** esconde
+
+Vale dizer em voz alta, porque é a fronteira que torna o corte aceitável:
+
+- **a biblioteca e a busca continuam com tudo.** A locadora é um lugar com
+  regra; o acervo é o seu disco. É a mesma fronteira que a R19 (§35) traçou ao
+  decidir que o empréstimo barra na locadora e não no player;
+- **"Começadas" não roda.** O que você começou continua alcançável, esteja ou
+  não na vitrine da semana;
+- **"Em mãos" não roda**, pelo motivo acima.
+
+"Lançamentos" passou a significar **o que há de mais novo entre o que está
+exposto esta semana**, e isso é de propósito: é o que a placa de uma locadora
+sempre quis dizer.
+
+### Verificação
+
+| | |
+|---|---|
+| `/api/locadora/estantes` | 200 em **0,32 s**, uma requisição no lugar de doze |
+| corte | **166 expostas de 600**, 16 por estante, 12 estantes |
+| determinismo | duas leituras seguidas, assinatura idêntica |
+| por círculo | trocando só o círculo, **0 de 16** coincidem |
+| por semana | trocando só a semana, **1 de 16** coincide (o esperado por acaso) |
+| virada | `2026-08-03T03:00:00Z` — meia-noite de segunda em UTC−3 |
+| placas | *"Terror 16 de 113"*, *"Faroeste 3 títulos"* — o "de" some quando cabe |
+| **"Em mãos"** | *Cassino Royale*, **fora da vitrine desta semana**, visível e pedível |
+| a 760px | nada estoura na horizontal |
+| testes | **175 passam**, 5 novos (segunda-feira, meia-noite local, semente, placeholders, ordem das estantes) |
+
+### O que fica de dívida
+
+O corte é constante do binário (`CAIXAS_POR_ESTANTE`) e a estante não tem "ver
+todas". Quem quiser os outros 97 filmes de terror vai pela biblioteca, com o
+filtro de tag que existe desde o M2 — que é resposta legítima, mas obriga a
+trocar de tela. Um "ver a estante inteira" que leve pra biblioteca já filtrada é
+o passo óbvio, e não entrou aqui porque ainda não sei se a falta incomoda: a
+rotação semanal pode ser suficiente pra que ela nunca se faça sentir.
+
+## 37. R21 — o menu de DVD, e a medição que redesenhou a tela
+
+> **Refeito na R31 (§47).** Os dois bugs relatados foram corrigidos — o clima
+> agora sai da mesma ordem de reivindicação da locadora, e a grade rola —, a cena
+> de fundo virou sorteada, a grade virou "capítulos" numerados, e a experiência
+> 2004 (vinheta pulável, vídeo dentro dos itens, viagem de câmera até o submenu,
+> trilha costurada, estilo por clima) foi construída.
+>
+> **Revisto em 03/08/2026.** O esqueleto serve; a experiência não. Foi pedido
+> **muito mais**: um menu de DVD clássico de verdade, com alma, na referência
+> da **edição especial de 2004** — vinheta animada antes do menu, vídeo rodando
+> dentro dos itens, transição própria por submenu, trilha em loop costurado, e
+> o **estilo saindo da temática do filme**.
+>
+> Mais: a cena de fundo é pra ser **aleatória** (aqui ela é sempre um quinto da
+> duração), e há **dois bugs relatados** — a música sai igual em todos os
+> filmes, e a lista de capítulos não rola.
+>
+> A troca de "capítulos" por "cenas", decidida por medição nesta seção, **não
+> foi confirmada** por quem decide.
+>
+> Ver `IDEIAS.md` §3.7.
+
+A ideia mais cara da lista, e a que mais dependeu de medir antes de desenhar.
+O `IDEIAS.md` §3 tinha uma exigência explícita — *"medir a cobertura de
+capítulos antes de desenhar a tela"* — e a medição derrubou duas premissas do
+plano.
+
+### As três medições
+
+Nos **548 filmes identificados** deste acervo:
+
+| | |
+|---|---|
+| com capítulos | **74 — 13,5%** |
+| com **nomes** de capítulo úteis | **9 — 1,6%** |
+| com folha de sprites (§8d), o "plano B" previsto | **0** |
+| mediana de capítulos, quando há | 16 |
+| recorde | 94 capítulos num filme só |
+
+**A primeira premissa que caiu: o menu de capítulos.** Ele funcionaria em nove
+filmes. Os "títulos" dos outros são vazios, `Chapter 01` — ou, o caso mais
+traiçoeiro e o mais comum, **o próprio timecode repetido no campo de nome**.
+Exibir `00:12:46` como se fosse o nome do capítulo é o "inglês" chutado que o
+§18 recusa: parece informação, e é o mesmo número que já está do lado.
+
+**A segunda: o plano B não existia.** O §3 assumia a folha de sprites como
+saída — *"que existe pra 725 arquivos"*. Existe: **635 episódios, 88 vídeos do
+YouTube e 2 clipes. Nenhum filme.** E gerá-la custa **412 s por filme**, porque
+varre o arquivo inteiro.
+
+### A saída veio de um fato que o projeto já tinha medido
+
+O §8g estabeleceu que **`-ss` antes do `-i` é seek instantâneo**. Medido agora,
+no acervo real:
+
+| | |
+|---|---|
+| um quadro no minuto 30 | **724 ms** |
+| doze quadros, em sequência | 5,8 s |
+| doze quadros, em paralelo | 4,1 s |
+| ladrilho por varredura (o método da folha de sprites) | **412 s** |
+
+Setecentas vezes mais barato. Uma grade de doze cenas custa quatro segundos,
+pagos **uma vez por filme** e guardados em disco — e cobrados só de quem entra
+na tela de cenas, que num DVD também era um item de menu e também demorava um
+instante pra carregar.
+
+### O desenho que a medição impôs
+
+> **A grade de cenas é o principal, e o capítulo é uma âncora melhor quando
+> existe.**
+
+Isso não é degradação — é o que "scene selection" sempre foi num disco: uma
+grade de miniaturas com timecode. Nome de capítulo era raro até nos discos
+prensados. **A diferença entre os dois casos é invisível na tela, e isso é
+correto**; o que muda é só a legenda, que diz a verdade: *"nos capítulos do
+disco"* ou *"em intervalos regulares"*.
+
+Duas regras sobre onde cortar, e as duas saíram de olhar o resultado:
+
+- **com capítulos, eles são amostrados, não truncados.** O recorde do acervo é
+  94 capítulos; pegar os doze primeiros daria doze cenas do primeiro ato.
+  Amostrado, a última cena de *Independence Day* cai aos **85% do filme**;
+- **sem capítulos, o passo regular evita os extremos.** Os primeiros 4% são
+  logo de estúdio e os últimos 4% são créditos — um não é cena, e o outro
+  entrega o final.
+
+E o capítulo que começa em zero nunca vira cena: em todo disco ele é a tela
+preta antes do logo.
+
+### O menu não se mete no caminho de ninguém
+
+O risco que o `IDEIAS.md` §4.4 tinha apontado é real: *"um menu que atrasa o
+play sem informar nada é a intro que todo mundo pula"*. A R10 (§22) já tinha
+movido o "tocar" pra uma decisão consciente, mas ali havia sinopse pra ler.
+
+Então o menu **não é uma etapa a mais** — ele é onde a caixa aberta já leva. O
+disco no palco da R11 (§23) passa a abrir o menu em vez de ir direto pro
+player, e o `▸ assistir` da biblioteca, da busca e da ficha continua indo direto
+pro filme, como sempre foi.
+
+**E só o disco tem menu.** A fita vai direto: ela não tem menu, tem rebobinar.
+A R19 (§35) transformou a diferença de formato em comportamento de um lado; esta
+é a outra metade da mesma moeda, e as duas juntas fazem VHS e DVD serem coisas
+diferentes de verdade, não só estéticas diferentes.
+
+### A música: zero bytes, e historicamente correta
+
+O §12 recusou CDN de fonte e ficou com a serifa do sistema, *"zero bytes"* — e a
+mesma régua vale pro som. Um loop `.ogg` por gênero custaria ~200 KB cada, mais
+escolher e licenciar. **Web Audio custa zero bytes**, e é o que aqueles menus
+eram de verdade: sequenciados, não gravados.
+
+O gênero vira parâmetro — escala menor e raiz grave pro terror e pro suspense,
+maior pro resto. Um pad de duas ondas desafinadas atrás de um filtro baixo, e um
+arpejo por cima. Três decisões que só aparecem ao escrever:
+
+- **o arpejo é agendado em blocos de oito**, não nota a nota. Agendar tudo
+  encheria a fila do `AudioContext`; agendar a cada nota dependeria do
+  `setTimeout` chegar na hora, e ele não chega;
+- **entra e sai em fade.** Um menu que começa a tocar de estalo assusta, e
+  fechar o contexto no meio de uma nota estala;
+- **o som tem interruptor, e ele é lembrado.** Áudio inesperado é hostil, mesmo
+  quando é a alma da coisa.
+
+### O fundo é a emissora, de novo
+
+A cena que roda atrás não precisou de nada novo: é **uma sessão HLS com offset
+e sem áudio**, que é o que a emissora (§25) faz desde a R13. Três decisões:
+
+- **o offset é um quinto do filme.** Não é zero e não é sorteado: um menu que
+  mostra o logo do estúdio atrás não mostra o filme, e um que mostra o terceiro
+  ato entrega o final;
+- **só começa depois de 900 ms.** Abrir e fechar o menu num gesto não deve
+  deixar um ffmpeg pra trás;
+- **o backdrop do M1 aparece na hora, por baixo.** Sem ele o menu abriria em
+  preto por um segundo, e a espera leria como travamento.
+
+Na tela de cenas o fundo recua — desfoca e escurece. A cena em movimento é a
+alma do menu principal e é ruído atrás de doze miniaturas; um DVD fazia o
+mesmo.
+
+### Duas correções que a tela cobrou
+
+1. **28 legendas viraram 8 idiomas.** `subtitle_langs` é uma faixa por linha, e
+   *Independence Day* traz `por, por, eng, spa, spa, fre, fre…`. Um menu que
+   lista o mesmo idioma cinco vezes está mostrando faixas, não idiomas — e a
+   pergunta que alguém faz na frente de um menu é *"tem português?"*. A ordem é
+   preservada, porque neste acervo o português é quase sempre a primeira faixa
+   e ordenar o jogaria pro meio.
+2. **O menu não escolhe legenda.** Ele diz o que o disco tem; escolher continua
+   no player, onde funciona desde o §18. Dois seletores seriam dois lugares pra
+   manter iguais por uma escolha que já tem dono.
+
+### Verificação
+
+Contra o acervo real, com Firefox por Marionette:
+
+| | |
+|---|---|
+| `/api/works/{id}/menu` | **0,21 s** |
+| `/api/works/{id}/cenas`, primeira vez | **3,7 s** — doze extrações |
+| `/api/works/{id}/cenas`, com cache | **0,018 s** |
+| caminho com capítulos | *Independence Day*, 57 capítulos, 12 cenas até 85% do filme |
+| caminho sem capítulos | *Drive*, passo regular de 4:01 a 1:28:41 |
+| o menu | título, *Continuar 1:01:07*, *Do começo*, *Cenas* — e nada de "Legendas" onde não há |
+| navegação | setas movem o foco na lista e na grade 4×3; enter escolhe; esc volta |
+| a caixa | DVD abre o menu; VHS continua indo direto pro filme |
+| cache em disco | 76 KB por filme, em `artwork/cenas/{media_file_id}/` |
+| testes | **182 passam**, 7 novos |
+
+### Duas dívidas, e uma armadilha que não disparou
+
+**A armadilha:** as cenas moram dentro de `artwork_dir`, e a limpeza de órfãos
+do §27 apaga o que não reconhece — foi exatamente assim que a R17 quase apagou a
+foto de todos os programas (§28). Aqui ela não dispara, porque a varredura só
+olha arquivos no nível de cima e as cenas estão em subpasta. Conferido com o
+ensaio: 6 órfãos apontados, nenhum deles cena.
+
+**A consequência disso é a primeira dívida:** por não serem vistas, elas também
+nunca são limpas. Apagar uma obra deixa as cenas dela para sempre. São 76 KB por
+filme — 40 MB se o acervo inteiro for visitado — então é dívida registrada, não
+urgência.
+
+**A segunda:** não há aquecimento. A primeira pessoa a abrir a tela de cenas de
+cada filme paga 3,7 s. O molde existe e está pronto — é o `job` do §34, que já
+faz exatamente isso pra trivia — e a diferença é que este não depende de rede
+nenhuma. Entra quando incomodar.
+
+**E o que não entrou de propósito:** "Extras". Um menu de DVD tinha, e este
+acervo não tem nada que sirva de extra — nenhum making-of, nenhum comentário.
+Um item de menu que abre uma tela vazia é pior que a ausência dele, e é a mesma
+regra do §24 que faz "Continuar" sumir quando não há de onde continuar.
+
+## 38. R22 — a ficha de produção, e a terceira peça de schema que não nasceu
+
+O `IDEIAS.md` §0 tinha medido a ausência e proposto o conserto numa frase:
+*"Um guia por região é um `ALTER TABLE` mais uma revisita ao TMDB."* A revisita
+estava certa. O `ALTER TABLE` não.
+
+### O que foi medido antes de escrever
+
+Em 40 filmes sorteados do acervo:
+
+| | |
+|---|---|
+| país de produção | **100%** |
+| idioma original | **100%** |
+| empresa produtora | 100% |
+| orçamento e bilheteria | 92% |
+
+**Cobertura total, e mesmo assim metade não entrou.** Porque cobertura não é o
+que decide — distribuição é:
+
+```text
+países : US 34 · GB 9 · JP 3 · FR 2 · IT 1 · KR 1 · CA 1 · DE 1
+idiomas: en 37 · ja 2 · ko 1
+empresas distintas: 34 — em 40 filmes
+```
+
+### Três recusas, cada uma com um motivo medido
+
+**Empresa produtora não entra.** Quase uma por filme. Um eixo em que cada item
+tem uma obra não é eixo, é lista — a mesma reprovação que o corte de "2+ obras"
+do §8h aplica às pessoas, e a mesma razão pela qual a R18 (§30) recusou o eixo
+de produção.
+
+**Orçamento e bilheteria não entram**, apesar dos 92%. O §33 já os traz do
+Wikidata **com a moeda**, e lá foi decisão explícita que valor em moeda que não
+sabemos nomear não vira curiosidade. Os campos `budget` e `revenue` do TMDB são
+número puro, **sem moeda nenhuma** — escrever "US$" sobre um orçamento em euros
+é a mentira com cara de metadado que o §18 proíbe. Duas fontes para o mesmo
+fato, e a segunda pior, é pior que uma fonte só.
+
+**Idioma não vira eixo** — e esta só apareceu depois de rodar no acervo
+inteiro. São 547 marcações e **519 são "inglês"**: 94,9%. Dos 11 idiomas, oito
+têm um filme só. Uma gaveta com 95% e oito com um filme cada não é um eixo. A
+tag continua existindo e é útil — `lang:japonês` acha os 12 pelo filtro que já
+existe desde o M2 — mas ela não ganha tela, exatamente como gênero e década não
+ganharam na R18 (§30).
+
+### A peça de schema que não nasceu
+
+País e idioma viram **tags**, não colunas. O `tag`/`work_tag` do M2 já é
+exatamente isto, o filtro por tag de `/api/works` existe desde então, e o guia
+já resolve gênero e década por ele. Uma coluna `pais` exigiria um caminho de
+consulta novo pra responder a mesma pergunta que `genre:Terror` já responde —
+e o eixo de região no guia acabou sendo o SQL de gênero com um `namespace`
+diferente.
+
+Vale registrar o padrão, porque é a **terceira fase seguida** em que a medição
+desfaz uma peça de schema prevista no plano:
+
+| fase | previsto | o que nasceu |
+|---|---|---|
+| R19 (§35) | tabela `exemplar` | um índice único parcial |
+| R21 (§37) | folha de sprites como plano B | `-ss` antes do `-i`, e cache em disco |
+| R22 | `ALTER TABLE` para país e idioma | tags, no mecanismo que já existia |
+
+A única migração desta fase acrescenta `producao` ao `CHECK` de `job.kind` —
+os oito valores anteriores repetidos, pela nota que o 0013 deixou escrita e o
+0020 repetiu.
+
+### A dívida do §8, paga
+
+O `IDEIAS.md` §8 avisava: *"A revisita ao TMDB da R22 são 548 chamadas — pela
+terceira vez um reparo de minutos vai correr dentro de um request."* Não
+correu. `POST /api/maintenance/aquecer-producao` nasce como `job`, no molde do
+§34: estado no banco, progresso visível, cancelamento no ponto seguro, e
+retomada pelo `WHERE`.
+
+**A retomada é exata e não custou coluna nenhuma:** o alvo é "filme
+identificado que ainda não tem tag de país". Rodar de novo continua de onde
+parou — o mesmo truque do `repair-series` (§21).
+
+E as requisições são **sequenciais** de propósito. 548 chamadas de ~0,2 s dão
+pouco mais de dois minutos; paralelizar economizaria um minuto e transformaria
+um job educado num raspador. É a mesma postura que o §33 fixou com o Wikidata.
+
+**O filme que casar de agora em diante já nasce com a ficha**, no
+`apply_candidate` — uma requisição a mais por filme **aceito**, não por
+candidato avaliado, porque `production_countries` não vem no resultado da busca.
+É a mesma forma que os créditos já usavam ali do lado. O aquecimento existe
+pros 548 que casaram antes, não pra ser o único caminho.
+
+### O resultado, no acervo inteiro
+
+548 de 548, zero falhas, **33 países e 11 idiomas**. E a forma do acervo:
+
+```text
+Estados Unidos 491 · Reino Unido 92 · Alemanha 27 · França 22
+Canadá 21 · Japão 20 · Austrália 11 · China 9 · Hong Kong 8 …
+```
+
+**Estados Unidos são 89,6% do acervo**, e é aí que o eixo tinha um problema de
+apresentação real: uma lista ordenada por contagem começa com um número que
+afoga os outros vinte e dois, e a seção passa a dizer *"você tem filme
+americano"* — que é verdade e não é informação.
+
+Duas decisões resolveram, e nenhuma delas é esconder o topo:
+
+- **o corte de 2 obras**, o mesmo do §8h: dos 33 países, **10 têm um filme só**.
+  Um país com uma obra não é prateleira, é linha de tabela — e dez delas
+  empurrariam pra fora os 23 que rendem;
+- **a legenda diz a forma, não o tamanho**: *"54 fora dos Estados Unidos"*. Esse
+  é o número que faz a seção valer a pena, porque é a pergunta que ninguém
+  conseguia fazer antes desta fase. Omitir os Estados Unidos "pra melhorar o
+  eixo" seria mentir por omissão; pôr o contraste ao lado é dizer a verdade
+  inteira.
+
+### Verificação
+
+| | |
+|---|---|
+| aquecimento | **548 de 548**, 0 falhas, ~2 min, retomável |
+| tags criadas | 33 `country:` · 11 `lang:` |
+| `/api/guia` | 0,82 s, agora com 23 países |
+| o eixo na tela | de *Estados Unidos 491* a *Suécia 2*, com pilha de pôsteres |
+| o clique | *Japão* → biblioteca filtrada, **20 filmes**: Akira, Ghost in the Shell, Ju-on, Noroi, O Chamado |
+| testes | **184 passam**, 2 novos |
+
+### O que fica
+
+**A wiki ganhou o eixo que faltava**, e a lista de eixos do §30 fecha: direção,
+elenco, trilha, gênero, década — e agora região. Produção continua fora, por
+medição e não por esquecimento.
+
+**Uma dívida pequena:** só filme tem ficha. Série teria que vir de `/tv/{id}`,
+que devolve `origin_country` em vez de `production_countries` — campo diferente,
+semântica parecida mas não igual, e as 115 séries deste acervo não sustentariam
+sozinhas nenhum eixo novo. Entra quando alguém sentir falta.
+
+## 39. R23 — a nota, e o número que a impede de mandar
+
+> **Revisto em 03/08/2026.** A nota e o peso limitado continuam de pé. O que
+> falta é a **review de verdade**: texto, com **comentário de outras pessoas**.
+>
+> A review mora na ficha do filme, permanente — e o feed recebe um **post de
+> referência** apontando pra ela, junto com as outras atividades (deu nota,
+> terminou o filme).
+>
+> Ver `IDEIAS.md` §3.4.
+
+Uma fase pequena decidida por uma frase. O `IDEIAS.md` §4.6 tinha aprovado
+classificação e resenhas **com ressalva**, e a ressalva era a fase inteira:
+
+> sinal fraco não pode mandar no forte.
+
+O M5 nasceu de duas premissas — *"nada é declarado"* e *"terminar > assistir"* —
+porque nota é enviesada: as pessoas dão cinco estrelas pro que acham que
+**deveriam** gostar, e uma estrela por raiva do final. Deixar a nota pesar mais
+que o comportamento desfaria o M5 inteiro, e o desfaria em silêncio: a curadoria
+continuaria respondendo, só que errado.
+
+### O número, e por que é 0,3
+
+A escala de afinidade do §8f já existia e não mudou:
+
+```text
+terminou              1.0
+gostou (≥60%)         0.6
+neutro                0.1
+largou cedo (≤15%)   −0.8
+reassistir           +0.2 / +0.4
+```
+
+`PESO_DA_NOTA = 0.3` **não foi escolhido pelo gosto** — é o maior valor que não
+inverte nada:
+
+```text
+terminou  1.0  +  nota 1 (−0,3)  =  0,7   → continua positivo
+largou   −0.8  +  nota 5 (+0,3)  = −0,5   → continua negativo
+```
+
+A nota move a obra **dentro da faixa que o comportamento já determinou**, e
+não atravessa o zero. Três estrelas valem exatamente zero: "achei ok" não é
+informação a favor nem contra, e tratá-lo como qualquer uma das duas seria
+inventar opinião.
+
+Isso está travado por teste, e o teste explica por que existe — um peso maior
+quebraria a regra sem quebrar nada visível, e o defeito só apareceria quando o
+`/for-you` começasse a recomendar o que a pessoa abandonou.
+
+**Conferido no acervo real**, que é diferente de conferido no teste: cinco
+estrelas em *A Casa de Cera* — largado aos 0% — e o perfil continuou contando
+**12 largadas**. O comportamento mandou.
+
+### Duas coisas que a nota não faz
+
+**Não cria gosto sozinha.** A consulta do perfil parte do `play_event`, então
+uma nota só chega à curadoria acompanhada de um sinal de comportamento. Avaliar
+um filme que você nunca abriu não move nada — a nota qualifica o que você
+assistiu, não substitui o assistir.
+
+**Não se mistura com o comportamento no perfil inspecionável.** O §4.6 exigiu os
+dois separados, e `avaliadas` e `nota_media` são campos próprios em
+`/api/curation/taste`. Misturados, não daria pra responder *"o Odeon está me
+recomendando pelo que eu vi ou pelo que eu disse?"* — e essa pergunta é a razão
+de o perfil ser inspecionável.
+
+### Por que não reusar o `work_feedback` do M5
+
+Era tentador: a tabela existe, tem zero linhas, e guarda opinião. São coisas
+diferentes, e o verbo denuncia:
+
+| | o que é | fala com |
+|---|---|---|
+| `work_feedback` | **instrução ao recomendador** — "nunca mais me ofereça" | o sistema |
+| `avaliacao` | **julgamento sobre a obra** — "isto é um 4" | você e a casa |
+
+Um `block` some com a obra do `/for-you`; uma nota 2 não deve sumir com nada. E
+dá pra amar um filme que você avaliaria 3. Fundi-las forçaria uma a mentir.
+
+### A nota da casa, e não a do mundo
+
+O que a ficha mostra é **o seu círculo** — a R19 (§35) rendendo de novo. A média
+de estranhos é o IMDb com passos extras, e disso o mundo já tem; a nota de
+alguém que você conhece diz alguma coisa.
+
+O filtro por círculo hoje não muda nada (todo mundo está na casa) e passa a
+mudar no dia em que a R25 trouxer gente de fora. É a mesma jogada do
+`programme.work_id` do §17: escrever a cláusula agora custa uma linha e evita
+descobrir depois que a ficha estava mostrando a nota de qualquer conta do
+servidor.
+
+### Escolhas de tela, cada uma com o seu porquê
+
+- **Cinco estrelas, não dez nem meia.** Meia-estrela dá impressão de precisão
+  que ninguém tem sobre um filme. Cinco degraus é o que uma locadora usava.
+- **Clicar numa estrela já grava.** Exigir "salvar" pra uma nota transformaria
+  um gesto em formulário. O texto, que de fato precisa de confirmação, tem o
+  botão dele.
+- **O texto é opcional.** A maior parte das avaliações do mundo é só a nota, e
+  exigir prosa faria a nota não ser dada. Texto em branco vira ausência de
+  texto, não texto vazio — senão a ficha renderizaria um parágrafo de nada.
+- **"Tirar a nota" existe.** "Não sei mais o que achei" é estado legítimo, e a
+  alternativa — ficar preso numa nota antiga — faria a nota não ser dada.
+- **A parte apagada da estrela é a mesma estrela sem cor.** Assim a fileira tem
+  sempre cinco e o olho lê a proporção, não a contagem.
+
+### O defeito que só a leitura do texto mostrou
+
+A fileira de estrelas **mentia pra quem não vê**. Com cinco glifos sempre
+presentes — três acesos, dois apagados —, o texto extraído de uma nota 3 saía
+`★★★★★`, e um leitor de tela diria "cinco estrelas". A correção é um
+`aria-label` com o número e as estrelas marcadas `aria-hidden`: a proporção
+continua sendo desenhada, e quem lê ouve *"3 de 5"*.
+
+É o §18 num lugar inesperado — a tela estava dizendo com cara de informação uma
+coisa que não era verdade.
+
+### Verificação
+
+| | |
+|---|---|
+| dar, trocar e tirar nota | 200 nos três; `PUT` porque avaliar de novo é trocar de ideia |
+| texto só com espaços | vira `null`, não parágrafo vazio |
+| nota fora de 1–5 | 400 |
+| obra apagada entre abrir e avaliar | 404, e não 500 |
+| a ficha | *"O que a casa achou · 4.0 · 2 notas"*, com a sua marcada e a do outro abaixo |
+| perfil inspecionável | `avaliadas` e `nota_media` em campos próprios |
+| **a invariante, no acervo** | 5 estrelas num filme largado aos 0% → **continua largado** |
+| testes | **189 passam**, 5 novos |
+
+### O que fica
+
+**A medição que vale registrar:** este acervo tem **5 obras com sinal** de
+comportamento suficiente pra render opinião. A R23 não trouxe volume — trouxe a
+possibilidade, e a regra que impede o volume futuro de estragar o M5. É o
+oposto do erro da R15 (§26): a tela não está confiante sobre o que não sabe,
+porque ela não afirma nada; quem afirma é quem avalia.
+
+**Uma dívida pequena:** nota só existe pra obra. Avaliar uma **temporada** ou
+uma série inteira é uma pergunta diferente, e o `work_id` da chave já aceitaria
+o id de uma coleção se o tipo mudasse — mas mudar o tipo pra atender uma
+pergunta que ninguém fez ainda é o `exemplar` da R19 de novo. Entra quando
+alguém quiser dar quatro estrelas pra terceira temporada.
+
+## 40. R24 — a retrospectiva, e o placar que entra reprovado
+
+> **Desfeito na R32 (§48).** O placar saiu do produto — arquivo, rota e tela —,
+> e no lugar dele entrou o que foi pedido: 72 conquistas em seis camadas, XP
+> derivado, nível, títulos e tags desbloqueáveis, bio, vitrine e a comparação
+> com os amigos **dentro** do perfil. A retrospectiva ficou.
+>
+> A separação que esta seção defendeu era real: apagar o placar custou um
+> arquivo e uma linha, como previsto. O preço foi a feature ficar escondida
+> numa aba que ninguém abria.
+>
+> **Revisto em 03/08/2026, e este é o mais importante de corrigir.**
+>
+> O argumento contra gamificação registrado nesta seção — *"não passa nos
+> pilares"*, o aviso impresso na tela mandando ignorar o número — **não é
+> posição do projeto. É posição de quem escreveu, contra quem decide.**
+>
+> O que foi pedido é um sistema ao estilo das conquistas da Steam: lista longa
+> em camadas (nível, fáceis, médias, difíceis, impossíveis, sagas), XP, nível
+> de usuário, comparação com amigos, tags e customização de perfil. A
+> retrospectiva foi uma **substituição não pedida** — ela pode sobreviver como
+> tela de perfil, mas não no lugar das conquistas.
+>
+> Ver `IDEIAS.md` §3.3.
+
+Duas telas, dois módulos, duas rotas — e a separação **não é organização, é
+reversibilidade**. O `IDEIAS.md` §6.2 decidiu "os dois, separados" com uma
+frase que é a especificação inteira desta fase:
+
+> o dia em que o placar estiver escolhendo filme por você é um dia em que dá pra
+> desligar só ele e ficar com a parte que descreve.
+
+### A premissa da fase estava errada, e a medição disse na cara
+
+A §7 apostou: *"agora existe atividade pra descrever: aluguéis, devoluções,
+atrasos, notas, fitas rebobinadas"*. Medido antes de escrever:
+
+| | |
+|---|---|
+| eventos | 128 |
+| obras tocadas | 18 — **2 terminadas, 12 largadas** |
+| pessoas com afinidade | 15 |
+| **empréstimos** | **0** |
+| **avaliações** | **0** |
+| dias com atividade | 3 |
+
+**Não existe.** A R19 e a R23 construíram o motor; ninguém rodou ele ainda. Os
+empréstimos e as notas que apareceram nas verificações daquelas fases eram
+testes, e foram removidos por serem exatamente isso.
+
+Isto é a armadilha da R15 (§26) — a tela que não estava crua, estava
+*"confiante sobre o que não sabia"* — chegando na tela que mais tenderia a
+repeti-la. A defesa não podia ser editorial ("escrever com cuidado"), porque
+daqui a um mês haverá dados e ninguém vai reler o texto. Ela é estrutural:
+
+> **cada bloco só existe quando tem o que dizer.**
+
+Hoje a retrospectiva rende **4 blocos e cala 2**. Quando a locadora rodar, rende
+6. Nenhuma linha precisa mudar pra isso acontecer.
+
+E o rodapé diz quantos calaram: *"2 capítulos ficaram de fora por não terem o
+que contar ainda."* Sem isso, uma tela curta faz a pessoa concluir que o Odeon
+não sabe nada dela — que é a leitura errada de uma tela que está sendo honesta.
+
+### A retrospectiva é o perfil do M5 com roupa nova
+
+Nada aqui é declarado, nada é pontuado, nada premia volume. O §8f já sabia
+dizer *"você costuma terminar palestra (100%)"*; a fase só deu voz a isso.
+
+O bloco de abertura é o que mais define o tom:
+
+> **Você abriu 18 obras e terminou 2.** Larga bem mais do que termina — é gente
+> que experimenta, não que coleciona.
+
+Um painel de gamificação esconderia as 12 largadas porque elas "não pontuam".
+Aqui elas são metade do retrato, e a metade mais interessante.
+
+Duas escolhas de honestidade que o dado cobrou:
+
+- **a hora vira período.** O histograma tem um pico, não um compromisso —
+  *"você assiste mais de madrugada"* é verdade; *"às 23h"* seria preciso e
+  falso. E histograma zerado devolve `None` em vez de "meia-noite", que é a
+  diferença entre não saber e afirmar;
+- **só afinidade positiva.** *"Você odeia documentário"* é informação boa pra
+  curadoria e uma frase que ninguém pediu pra ler sobre si. A retrospectiva
+  descreve; não julga.
+
+### O defeito da primeira versão: uma frase que o dado não sustentava
+
+Ela dizia *"15 pessoas aparecem mais de uma vez no que você termina"* — e
+`person_affinity` conta obras **abertas**, não terminadas, e inclui quem você
+largou. A frase afirmava mais do que sabia.
+
+Corrigido filtrando por afinidade positiva, e aí o número mudou junto: **6
+pessoas**, e agora o título ("quem você não larga") e a frase dizem a mesma
+coisa que o dado. É o §18 aparecendo numa tela em vez de num metadado —
+inventar não é privilégio de campo de banco.
+
+### O placar entra reprovado, e o custo está na própria tela
+
+O §5 aplicou os quatro pilares a onze ideias e **o placar foi a única
+reprovação que sobreviveu**. Ele entra por decisão explícita, e o §6.2 mandou
+registrar o custo. Registrá-lo só no doc deixaria de fora justamente quem está
+olhando pro número — então ele está impresso embaixo do placar:
+
+> Contar não é medir. Um filme de 4 minutos vale o mesmo que um de 3 horas aqui
+> — se este número começar a escolher o que você assiste, ignore-o.
+
+Quatro decisões que reduzem o dano sem inventar nada:
+
+- **o streak não quebra hoje.** Se a última atividade foi ontem, ele continua
+  contando: o dia ainda não acabou, e um contador que zera às 00h01 transforma
+  a noite numa obrigação. Ele só quebra quando um dia inteiro passa em branco;
+- **o maior streak sobrevive à quebra**, senão a tela apagaria o que a pessoa
+  fez por causa de uma viagem — a punição do §6.2 na forma mais crua;
+- **as horas são a posição máxima alcançada**, não a duração das obras
+  terminadas. Quem parou aos 40 minutos assistiu 40 minutos; contar o filme
+  inteiro premiaria abrir e fechar;
+- **zero em tudo não vira painel de zeros.** `tem_o_que_contar` faz a tela
+  dizer *"ainda não há o que contar"* em vez de imprimir `0 · 0 · 0`, que
+  parece defeito e ensina a não voltar.
+
+### As três regras do §6.2, e onde cada uma é verdade no código
+
+Não bastava obedecê-las: era preciso que dessem pra **conferir**.
+
+| regra | onde ela vive |
+|---|---|
+| a retrospectiva nunca cita o placar, e vice-versa | dois módulos e dois componentes; nenhum importa o outro. As únicas menções cruzadas são comentários explicando a regra |
+| o placar não entra em nenhuma tela do fluxo principal | sala própria em `experimentação`; `ForYou` não o conhece |
+| o placar não alimenta o M5 | `placar.rs` é **somente leitura** — não tem um `INSERT`, `UPDATE` ou `DELETE` — e `curation/` não o importa |
+
+**Desligar o placar é apagar dois arquivos e duas linhas.** Se um dia alguém
+precisar de um número que já está calculado ali, a resposta certa é duplicar a
+consulta, não criar a dependência.
+
+### A armadilha que a própria verificação encontrou
+
+Ao conferir a regra 2 por `grep`, o resultado deu **positivo**: `ForYou.tsx`
+continha "placar". Era um falso positivo com um problema de verdade dentro —
+uma fileira de lâmpadas da calibração usava `className="placar"` desde antes,
+pra mostrar quantas obras você já votou.
+
+Nada visualmente colidia. Mas o §6.2 exige que dê pra desligar o placar
+sozinho, e quem for fazer isso vai começar por um `grep` — que encontraria um
+indicador de calibração no meio do fluxo principal e concluiria a coisa errada.
+A classe virou `.calib-luzes`. **A separação precisa sobreviver ao grep, não só
+à intenção.**
+
+### Verificação
+
+| | |
+|---|---|
+| `/api/retrospectiva` | 4 blocos, **2 calados**, no acervo real |
+| a frase de abertura | *"Você abriu 18 obras e terminou 2…"* |
+| pessoas | 6 com afinidade positiva, com retrato |
+| gostos | Japão · japonês · Crime — e os dois primeiros são tags da R22 (§38) |
+| `/api/placar` | 2 terminadas · 5 horas · 3 dias · streak 3 |
+| as três regras | conferidas por `grep`, não por leitura |
+| lâmpadas da calibração | 6, intactas depois do renome |
+| testes | **196 passam**, 7 novos |
+
+### O que fica
+
+**A dívida é de dado, não de código.** As duas telas estão prontas pra uma
+locadora que rodou e para notas que foram dadas; nenhuma delas precisa mudar
+quando isso acontecer. É o oposto do erro da R15: em vez de uma tela confiante
+sobre o que não sabe, duas telas que sabem exatamente o tamanho do que têm.
+
+**E uma observação que só a fase seguinte responde:** a R25 (feed do círculo)
+depende do mesmo combustível que faltou aqui. Ela vai encontrar `play_event` com
+128 linhas de uma pessoa só, e zero empréstimos. O motor existe desde a R19 —
+falta alguém pegar uma fita.
+
+## 41. R25 — o mural do círculo, e o que ele se recusa a contar
+
+> **Revisto em 03/08/2026.** O que esta seção chama de decisão de privacidade —
+> *"o mural conta o que terminou, não o que abriu"* — contraria a visão:
+> **entre amigos é tudo aberto**, inclusive o que está sendo assistido agora e
+> o que foi largado no meio.
+>
+> E o mural é uma fração do que foi pedido. Falta postar, comentar, pesquisar
+> pessoas, ver quem está online (duas listas: servidor e amigos), mandar mensagem
+> e customizar perfil.
+>
+> **Feito em parte na R28 (§44):** o mural deixou de ser do círculo e passou a
+> ser seu — você e seus amigos —, e adicionar amigo existe.
+>
+> **Concluído na R33 (§49):** a poda por privacidade caiu, e com ela o resto da
+> lista — posts, comentários, presença, busca e mensagem direta. Dos dois
+> motivos que esta seção deu pra podar, o de privacidade perdeu a premissa (o
+> aceite da amizade é o consentimento) e o de **volume** ficou de pé: as fontes
+> novas são uma linha por pessoa, não o log cru.
+>
+> Ver `IDEIAS.md` §3.8.
+
+A última da lista, e o `IDEIAS.md` §7 já sabia por quê: *"o último porque é o
+que mais depende de tudo acima ter gerado acontecimento"*.
+
+### A medição, e o que ela obrigou a decidir
+
+| | |
+|---|---|
+| `play_event` cru | **128 linhas** |
+| pares (pessoa, obra) | 18 |
+| **obras terminadas** (§8f) | **2** |
+| empréstimos · avaliações | **0 · 0** |
+| membros do círculo | 2 — e **1 com histórico** |
+
+Um mural sobre a primeira linha diria *"sam abriu Drive"* dezoito vezes. Não é
+mural, é log. Sobre a terceira, são duas entradas. **Nenhuma das duas é um feed
+ainda** — e essa era a informação que a fase precisava encarar em vez de
+disfarçar.
+
+### A decisão: conta o que terminou, não o que abriu
+
+Ela resolve dois problemas, e o segundo não estava no plano.
+
+**Volume.** 128 vira 2. Um mural de casa que registra cada play é ruído, e
+ruído ensina a não olhar — a mesma razão do §24.
+
+**Privacidade.** Um feed cru publicaria pra casa inteira tudo que cada um abriu
+e largou aos oito minutos. Isso é **mudança de contrato**: até aqui
+`play_event` era privado, e a R19 (§35) só tornou público o que acontece
+*entre* as pessoas — quem pegou uma fita, quem devolveu como.
+
+Terminar é diferente de experimentar. Anunciar o que se completou é o que
+alguém contaria na cozinha; anunciar cada coisa que se provou e abandonou é
+vigilância com cara de recurso social. O §8f já dizia que **terminar é o sinal
+honesto**; aqui ele vira também **o limite do que se publica**.
+
+Vale dizer o que isso custa, porque é uma escolha e não um teorema: as 12
+obras largadas deste acervo não aparecem no mural. Elas aparecem na
+retrospectiva (§40), que é sua e só sua — e essa assimetria é o desenho, não um
+descuido.
+
+### Cinco acontecimentos, nenhuma tabela
+
+O §6.5 tinha previsto: *"o feed é um `SELECT` sobre `play_event` e `emprestimo`
+com um `JOIN` — nada de segurança muda"*. É literalmente isso, com `avaliacao`
+junto: um `UNION ALL` de cinco fontes, escopado por `circulo_membro`.
+
+```text
+rudney avaliou Drive — ★★★★                                      hoje
+Você terminou 007: Cassino Royale                                hoje
+rudney devolveu Drive — sem rebobinar · atrasada · pelo prazo   ontem
+Você pediu Drive de volta — de rudney                       há 3 dias
+rudney pegou Drive na locadora                          há uma semana
+```
+
+A terceira linha é a fase inteira num exemplo: *"sem rebobinar · atrasada ·
+pelo prazo"* são três fatos sobre uma pessoa real, nenhum deles inventado — a
+condição saiu do `playback_state` de quem teve a fita (§35), o atraso saiu da
+comparação com o prazo, e "pelo prazo" saiu da devolução automática.
+
+**É a quarta fase seguida em que a peça de schema prevista não nasce.** O §38
+já tinha registrado três — `exemplar` (R19), a folha de sprites (R21), as
+colunas de produção (R22) — e o feed fecha o padrão.
+
+E o `terminou` sai da regra do §8f, que agora tem **cinco leitores**: curadoria,
+guia (§30), locadora (§35), placar (§40) e mural. Uma definição, cinco telas —
+escrever outra aqui faria o mural discordar da retrospectiva sobre a palavra.
+
+### A frase é montada no cliente, e é a exceção que confirma a regra
+
+As curiosidades (§32) e a retrospectiva (§40) montam a frase no servidor, e o
+motivo sempre foi o mesmo: uma gramática só. Aqui é o contrário, de propósito.
+
+Estas cinco frases são **gramática de lista**, não prosa: o servidor manda o
+tipo e as peças, e a tela conjuga. Mandar a frase pronta impediria o mural de
+dizer *"Você"* no lugar do seu próprio nome — e "sam terminou Cassino Royale"
+lido pelo sam é a diferença entre um mural e um relatório sobre você.
+
+### O mural diz quantas vozes tem
+
+Com os dados reais, ele mostra duas linhas e depois:
+
+> Só uma das 2 pessoas do círculo apareceu por aqui até agora.
+
+Um mural com um nome só não é a casa conversando, é uma pessoa em voz alta.
+Sem esse número a tela pareceria funcionar tendo só um lado — e é exatamente o
+estado deste acervo. É a defesa da R24 (§40) outra vez: **a tela diz o tamanho
+do que ela tem**, em vez de deixar o vazio parecer completude.
+
+### Duas escolhas menores, e o porquê de cada uma
+
+- **as suas linhas ficam marcadas, não escondidas.** Um feed que esconde os
+  próprios atos é o padrão da indústria e conta uma história torta: você é
+  membro do círculo, e metade do que aconteceu na casa foi você;
+- **lista, não cartões.** Cartão dá peso igual a tudo e transforma "rudney
+  devolveu sem rebobinar" em anúncio. Um recado de corredor se lê de cima pra
+  baixo.
+
+E o barramento do M3 alimenta o mural como já alimenta a locadora desde a R19 —
+o que acontece na loja aparece aqui sem recarregar. É o que separa um mural de
+um relatório.
+
+### O balcão e o mural mostram devolução: por que os dois
+
+A locadora (§35) já lista as últimas devoluções no balcão. Não é duplicata: são
+perguntas diferentes. O **balcão** é o que está acontecendo na loja agora —
+quais fitas estão fora, o que acabou de voltar, e é lá que se pede de volta. O
+**mural** é a história do círculo, com tudo que aconteceu e não só o que a
+locadora produziu.
+
+Se um dia as duas discordarem, quem está errado é o balcão: o mural lê as
+tabelas cruas, o balcão lê um recorte.
+
+### Verificação
+
+| | |
+|---|---|
+| `/api/feed` | 200; escopo por `circulo_membro` |
+| os cinco tipos | conferidos com dados temporários: terminou · pegou · devolveu · pediu · avaliou |
+| a devolução | *"sem rebobinar · atrasada · pelo prazo"*, os três fatos da R19 |
+| o pedido | *"Você pediu Drive de volta — de rudney"* |
+| **com os dados reais** | 2 linhas, e *"só uma das 2 pessoas apareceu"* |
+| tempo | relativo (*hoje*, *ontem*, *há uma semana*), não data exata |
+| limite | grampeado em 200 — `?limit=100000` num UNION de cinco fontes seria varredura a pedido |
+| testes | **198 passam**, 2 novos |
+
+Os dados usados pra provar os cinco tipos foram removidos: eram empréstimos e
+notas inventados por mim, atribuídos a pessoas reais.
+
+### O que fica, e é o fim da lista do `IDEIAS.md`
+
+**A R18 à R25 estão feitas.** O que sobra do plano é o que ele mesmo mandou pra
+projeto próprio: círculo federado entre Odeons (§6.5), com seção de segurança
+própria.
+
+**E fica a observação que atravessou as três últimas fases:** R23, R24 e R25
+construíram telas para uma atividade que ainda não existe. Elas não estão
+quebradas nem cruas — estão **corretas e vazias**, cada uma dizendo o tamanho
+do que tem. A locadora funciona desde a R19; falta alguém pegar uma fita.
+
+Isso é o oposto do erro que a R15 (§26) registrou, e é a coisa da qual este
+documento tem mais orgulho nesta série: a tela que não sabe, diz que não sabe.
+
+## 42. R26 — o convidado, e a auditoria que o precedeu
+
+> **Revisto em 03/08/2026.** Duas coisas.
+>
+> **A fase inteira nasceu de uma pergunta de quem programa**, não de quem
+> decide — "federado ou hospedado?" foi proposta aqui, e a lista de ideias
+> original não pede nem um nem outro.
+>
+> **E a rota de presença fechada abaixo como vazamento é feature.** A visão
+> pede que amigo veja o que amigo está assistindo agora; o `/api/transcode/
+> sessions` virou rota de admin justamente pra impedir isso. O token de mídia
+> do §43 continua bom e fica.
+>
+> **Resolvido na R28 (§44):** o convite passou a ser do servidor e `guest`
+> sobreviveu — a regra "só assiste o que pegou emprestado" perdeu o JOIN com o
+> círculo e não perdeu mais nada.
+>
+> **E a presença voltou na R33 (§49)** — mas não por esta rota. O
+> `/api/transcode/sessions` continua fechado, e o motivo mudou: ele só enxerga
+> quem está transcodificando, e o §3 decidiu que aqui o caso comum é Direct
+> Play. A presença de verdade sai de `auth_session.last_seen_at` e do heartbeat
+> do player.
+>
+> Ver `IDEIAS.md` §2.2 e §4.
+
+O `IDEIAS.md` §6.5 adiou "gente de fora" e mandou o assunto pra projeto próprio,
+*"com seção de segurança própria"*. Esta é a seção.
+
+### A auditoria, feita com uma conta de verdade
+
+O §6.5 listou três compromissos assumidos por causa da tailnet: o `?token=` na
+query (§9b), o CORS pelo mesmo host (§10b) e a montagem gravável (§22). Medido
+com a conta `user` que já existe neste servidor, o buraco é maior que a lista:
+
+| o que uma conta comum alcançava | rota | veredito |
+|---|---|---|
+| os caminhos do seu disco | `/api/libraries` → `/media/Movies` | corrigido |
+| o mapa das montagens, e que é gravável | `/api/storage` → `gravavel: true` | virou rota de admin |
+| quem está assistindo o quê, agora | `/api/transcode/sessions` | virou rota de admin |
+| **o acervo inteiro, sem escopo** | `/api/stream/{qualquer}` → **206** | é o resto desta seção |
+
+Os três primeiros são vazamentos comuns e o conserto é chato. O quarto é o
+interessante, porque **não era um bug**.
+
+### A decisão da R19 estava certa, e é exatamente errada aqui
+
+A R19 (§35) decidiu que o empréstimo barra **na locadora e não no player**, e o
+raciocínio continua de pé: barrar a reprodução transformaria um morador em
+porteiro do outro, e trancaria o dono fora do próprio arquivo.
+
+Para um forasteiro a mesma regra se inverte de sentido: entrar no círculo
+entregaria a prateleira inteira, e a escassez — a cópia única, o prazo, o pedir
+de volta — viraria encenação.
+
+Isso é literalmente o que o §6.5 quis dizer com *"a rede social muda a ameaça,
+não só a tela"*. A diferença é que agora há medição em vez de suposição.
+
+### A regra nova, e o que ela faz a R19 valer
+
+> **O convidado só assiste o que pegou emprestado.**
+
+| papel | assiste |
+|---|---|
+| `admin`, `user` — moradores | **tudo**. O disco é deles |
+| `guest` — convidado | **só o que está com ele**, enquanto estiver |
+
+Nada disso foi inventado nesta fase. A cópia única da R19 vira verdade técnica;
+o prazo vira o fim do acesso; a devolução automática vira a revogação. E a
+revogação **não precisou existir**: `devolvido_em IS NULL` é a autorização
+inteira, então devolver — por gesto ou por prazo — corta o acesso no mesmo
+instante, sem nenhum caminho separado pra alguém esquecer de escrever.
+
+Conferido de ponta a ponta, com uma convidada de verdade:
+
+```text
+sem empréstimo  → 403 "você precisa pegar esta caixa emprestada na locadora"
+pega a caixa    → 206
+devolve         → 403
+```
+
+### A regra tem um dono, e é um arquivo
+
+`auth/acesso.rs`. Toda rota que entrega **bytes de mídia** passa por ele:
+stream direto, plano de reprodução, sessão HLS, legenda, folha de sprites, menu
+de DVD e a grade de cenas. Espalhar a checagem pelos handlers é como o defeito
+nasce — seis lugares, e o sétimo esquece.
+
+Duas das sete não eram óbvias e valem nota: a **folha de sprites** (§8d) é o
+filme inteiro em miniatura, e a **grade de cenas** (§37) são doze quadros dele.
+Servir qualquer uma a quem não pegou a caixa é entregar o conteúdo em resolução
+baixa e chamar de metadado.
+
+### O `session_id` era a autorização inteira
+
+`GET /api/hls/{session_id}/{arquivo}` servia os segmentos pra quem tivesse o id.
+Um UUID não é adivinhável — mas **id impalpável é capacidade, não permissão**, e
+é a mesma ressalva que o §9b já fazia sobre o `?token=`. Com um convidado no
+círculo ela deixa de ser acadêmica.
+
+A sessão passou a ter dono, e `hls_file` responde **404** — e não 403 — pra
+sessão alheia: quem pede não deveria saber que ela existe. `stop_session` ganhou
+a mesma trava, porque encerrar a sessão de outra pessoa derruba a reprodução
+dela.
+
+As sessões de canal ao vivo (§25) têm dono `nil`: elas nascem da emissora e não
+de um pedido de pessoa. São da casa, e morador as alcança.
+
+### O que a regra deliberadamente NÃO restringe
+
+**Navegar.** Um convidado lê o acervo inteiro — título, sinopse, elenco, pôster,
+a locadora com a rotação da semana. Uma locadora deixa ler a caixa toda antes de
+alugar, e um catálogo que esconde o que existe não é loja, é cofre com vitrine.
+
+É escolha, não descuido: convidar alguém é dizer a essa pessoa o que você tem.
+Quem não quiser dizer, não convida.
+
+### O convite
+
+Código de 128 bits — o mesmo teto do token de sessão do §9b — guardado como
+SHA-256, como as sessões desde sempre. Vazar o banco não dá convite a ninguém.
+
+Ele **vence em sete dias**, o mesmo prazo da fita (§35), e a coincidência é de
+propósito: as duas coisas são empréstimos de acesso. Um convite eterno é uma
+senha permanente esquecida num aplicativo de mensagem.
+
+Três detalhes que a tela cobra:
+
+- **o código aparece uma vez só**, e o aviso vem junto — não depois, que é
+  quando a pessoa já fechou a janela;
+- **resgate e login são o mesmo gesto**. Criar a conta e em seguida pedir pra
+  digitar o mesmo usuário e senha de novo seria cerimônia;
+- **a mesma frase pra código errado, vencido e usado.** Distinguir diria a quem
+  tenta se o código existe, e um "não" que informa é um oráculo.
+
+### A colisão de nome, que desta vez tinha consequência de acesso
+
+A tela de administração já tinha um botão **"+ convidar"** em *Pessoas*. Ele não
+convida: ele **cria um morador**, com senha definida ali, e morador assiste
+tudo.
+
+Com o convite de verdade logo abaixo, ficaram dois botões com o mesmo rótulo e
+consequências de acesso opostas — e é assim que um estranho vira morador por
+engano. Virou **"+ criar conta"**, e a opção do papel passou a dizer o que ela
+faz: *"morador — vê e assiste tudo"*.
+
+É a segunda vez nesta série que um nome herdado atrapalha uma separação nova; a
+primeira foi o `.placar` da R24 (§40). A diferença é que lá o risco era de
+manutenção e aqui é de permissão.
+
+### O defeito que a própria limpeza encontrou
+
+Ao remover a convidada de teste, o banco recusou:
+
+```text
+ERROR: new row for relation "convite" violates check constraint
+       "convite_uso_completo"
+```
+
+Duas regras que eu tinha escrito **no mesmo arquivo, com dez linhas de
+distância**, se contradiziam:
+
+- `usado_por … ON DELETE SET NULL` — apagar a pessoa não deve apagar o registro
+  de que o convite foi usado;
+- `CHECK (usado_em e usado_por preenchidos juntos, ou nenhum)`.
+
+O `SET NULL` produz exatamente o estado que o CHECK proíbe. O resultado era uma
+linha de `app_user` **indelével**, e o administrador descobriria isso por um
+erro de constraint no meio da tela.
+
+O CHECK é que estava errado: *"usado por alguém que não está mais aqui"* é um
+estado legítimo — é o que resta de um convidado removido. A 0026 troca a regra
+por `usado_por IS NULL OR usado_em IS NOT NULL`, que proíbe só a metade que
+nunca faz sentido.
+
+A lição vale mais que o conserto: **uma constraint que descreve o estado normal
+pode proibir o estado residual que outra regra produz de propósito.**
+
+### Verificação
+
+| | |
+|---|---|
+| convite → conta | emitido, resgatado, e o **mesmo código recusado na segunda vez** |
+| a convidada, sem empréstimo | 403 em stream, plan, menu, cenas e scrub |
+| a convidada, com empréstimo | **206** |
+| depois de devolver | **403**, sem revogação em separado |
+| o morador | inalterado — 206 sem empréstimo, como o §35 decidiu |
+| `/api/libraries` | `root_path` só pra admin; a lista continua alimentando o filtro |
+| `/api/storage`, `/api/transcode/sessions` | 403 pra quem não administra |
+| remover um convidado | funciona (0026) |
+| testes | **203 passam**, 7 novos |
+
+### O que fica de dívida, e é honesto dizer
+
+**O `?token=` na query continua lá.** Ele é o primeiro dos três compromissos do
+§6.5, e esta fase não o resolveu: `<video src>` e `<img src>` continuam sem
+mandar header. O §9b já escreveu o conserto certo — *"emitir um token de mídia
+curto e separado do token de sessão"* — e ele ficou de fora porque o escopo por
+empréstimo já limita o estrago: um token de convidado vazado num log serve
+apenas para o que aquela pessoa pegou emprestado, e só enquanto pegou.
+
+**A montagem gravável também continua** (§22). Um convidado não alcança nenhuma
+rota que escreva em disco, mas a montagem é `rw` e o conserto de verdade é o
+`:ro` que o próprio `docker-compose.yml` documenta como reversível.
+
+**E o círculo federado continua não existindo.** Esta fase escolheu o convidado
+hospedado, que o §6.5 chama de *"um Netflix com dono"* — e a alfinetada é justa.
+A diferença é que agora o dono empresta em vez de servir: o convidado não tem
+acesso ao acervo, tem acesso ao que pegou.
+
+## 43. R27 — o token de mídia, e a dívida mais antiga do projeto
+
+O `auth/middleware.rs` carregava esta frase desde o M6:
+
+> Token em query string vaza pra log de acesso e histórico do navegador.
+> Restringi-lo às rotas de mídia limita o estrago, e num servidor de uma pessoa
+> só na tailnet o risco é aceitável. **Se um dia isso for exposto de verdade, o
+> certo é emitir um token de mídia curto e separado do token de sessão.**
+
+O §6.5 listou esse `?token=` como o primeiro dos três compromissos que "gente de
+fora" cobraria. A R26 (§42) trouxe gente de fora e **não pagou**. Esta paga.
+
+### O que exatamente estava errado
+
+O que ia na query **era o token de sessão**: 90 dias de validade, acesso total à
+API. Um `access.log` de proxy reverso, um histórico de navegador, um print de
+tela com a URL do vídeo — qualquer um deles entregava uma conta inteira, não um
+pôster.
+
+### As oito horas, medidas antes de escolhidas
+
+Um token de mídia precisa sobreviver a assistir a coisa mais longa do acervo sem
+interrupção; se ele vencer no meio, a reprodução quebra e a fase vira um
+incômodo. Medido:
+
+| | |
+|---|---|
+| arquivo mais longo | **4,90 h** |
+| filme mais longo | 4,04 h — *Liga da Justiça de Zack Snyder* |
+| arquivos acima de 3 h | 15 |
+| **acima de 5 h** | **0** |
+
+Oito horas cobrem o maior arquivo com três de pausa por cima, e são **1/270 da
+validade da sessão**. Menos quebraria a reprodução no meio; mais desfaria a
+razão de a fase existir.
+
+### O que faz a separação valer alguma coisa
+
+Emitir um token novo não conserta nada sozinho — se a query continuasse
+aceitando o de sessão, isso seria cerimônia. O conserto está no middleware:
+
+> **header e cookie resolvem sessão; a query resolve mídia.**
+
+São duas tabelas e dois escopos, e o caminho por onde o token chegou decide qual
+consultar. Conferido nos quatro quadrantes:
+
+| | |
+|---|---|
+| sessão na query | **401** — era 200 antes desta fase |
+| sessão no header | 200, a API inalterada |
+| mídia na query | 200 |
+| **mídia no header, contra a API** | **401** — ele não lista, não aluga, não administra |
+
+Há um teste que trava isso, e ele lê o próprio código-fonte do `require_auth`
+pra verificar a ordem dos ramos. É feio de propósito: se alguém um dia reunir os
+três caminhos num `or_else` de novo, o token de sessão volta a valer na URL e a
+fase inteira desaparece **sem nenhum teste de comportamento quebrar**.
+
+### Por que tabela, e não um token assinado
+
+Um HMAC dispensaria a tabela e a consulta. O §9b já enfrentou essa escolha ao
+recusar JWT pra sessão — *"JWT é stateless, o que soa bom até você querer
+deslogar um aparelho perdido"* — e aqui vale mais: um token de mídia vazado é
+justamente a coisa que se quer revogar **agora**, não daqui a oito horas.
+
+A linha some da tabela e acabou. E a consulta é um `SELECT` por chave primária
+numa rota que já lê o banco pra achar o arquivo.
+
+### Sair passou a sair
+
+`revoke` apagava a sessão e deixava o token de mídia vivo — oito horas de bytes
+depois de um logout. Agora ele lê o dono da sessão **antes** de apagá-la e
+revoga a mídia junto; o cliente limpa as duas chaves pelo mesmo motivo.
+
+Um "sair" que não sai não é sair.
+
+### O que fica
+
+**O `?token=` continua existindo**, e vai continuar: `<video src>`, `<img src>`
+e `<track>` não mandam header, e isso não é escolha do Odeon. O que mudou é o
+que está escrito ali.
+
+E o segundo dos três compromissos do §6.5 — **a montagem gravável** (§22) —
+continua de pé. Nenhuma rota que um convidado alcance escreve em disco, e o
+conserto de verdade é o `:ro` que o próprio `docker-compose.yml` documenta como
+reversível em uma linha. Fica registrado, sem pressa fingida.
+
+### Verificação
+
+| | |
+|---|---|
+| emissão | `POST /api/auth/media-token`, autenticada por header |
+| os quatro quadrantes | 401 · 200 · 200 · 401, como a tabela acima |
+| logout | o token de mídia morre junto: 200 → **401** |
+| a tela | 25 imagens de artwork, **nenhuma quebrada** |
+| HLS | playlist servida com o token de mídia; sessão alheia continua 404 (§42) |
+| testes | **204 passam**, 1 novo — o que lê o `require_auth` |
+
+## 44. R28 — amigos no lugar do círculo, e a tabela que morreu em vez de ser renomeada
+
+Esta é a primeira fase escrita **depois** do realinhamento de 03/08/2026 — a
+primeira em que o `IDEIAS.md` é a espec de verdade, e não uma interpretação
+dela. Ela desfaz um conceito que oito fases usaram como alicerce.
+
+### O conceito que ninguém pediu
+
+A R19 (§35) precisava de um escopo pra escassez. O argumento estava escrito na
+própria migração 0021, e ele é bom:
+
+> *"'este DVD está alugado' é falso quando o arquivo está sempre lá, e o §18
+> proíbe dizer coisa falsa com cara de metadado. Dentro de um círculo deixa de
+> ser falso — a fita **está** com alguém."*
+
+Daí nasceu o **círculo**: um grupo fechado, com dono, com prazo e limite
+próprios. E como a mesma migração observou, adotá-lo "custa uma coluna e evita
+uma migração dolorosa" — então ele foi adotado em seis lugares de uma vez:
+empréstimo, rotação, nota, feed, convite e o acesso do convidado.
+
+O raciocínio tinha um furo, e não é o técnico. A palavra nas anotações originais
+é **amigos**. Ninguém pediu grupo. O escopo foi inventado pra resolver um
+problema de honestidade do schema, e depois passou a decidir coisas de produto —
+quem vê a sua nota, quem aparece no seu mural, o que um convidado assiste.
+
+### A pergunta que desfez tudo: de quem é o estoque?
+
+Duas saídas cabiam. Traduzir `circulo` para `grupo` e seguir; ou perguntar de
+quem é a loja. A escala já estava medida no `IDEIAS.md` §3.2:
+
+> ~40 caixas na loja inteira por semana — **não 40 por estante**.
+
+*A loja*, no singular. Uma locadora de bairro não tem um estoque por turma de
+amigos. Com o estoque sendo **do servidor**, o empréstimo deixa de precisar de
+escopo, e "amigos" passa a existir só onde significa alguma coisa: no social.
+
+Isso não é economia de código, é uma mudança de regra — **uma cópia por caixa no
+servidor**, não uma por caixa por grupo. Quem te barra agora pode ser qualquer
+pessoa que entra ali, e é por isso que o balcão passou a listar todas elas.
+
+### A janela, e ela não volta
+
+Medido antes de escrever uma linha:
+
+| | |
+|---|---|
+| círculos | 1 — "A casa", semeado pela própria 0021 |
+| membros | 2, que são os 2 usuários do servidor |
+| empréstimos · avaliações · convites | **0 · 0 · 0** |
+
+**Não havia um único dado escopado por círculo.** O `ALTER TABLE` custou nada;
+daqui a um mês custaria decidir a que grupo pertence cada empréstimo já feito. A
+0021 fez a conta certa com o sinal invertido: era a adoção que ia doer depois.
+
+A única coisa real dentro de `circulo_membro` era que aquelas duas pessoas se
+conhecem — e ela foi preservada. A migração semeia a amizade a partir da
+associação que existia, em vez de deixar as duas acordarem estranhas.
+
+### Uma linha por amizade, e o Postgres é quem ordena
+
+O par é **canônico**: `a < b` por uuid, imposto por CHECK, com a chave primária
+sendo o par. `(sam, rudney)` e `(rudney, sam)` são a mesma linha, e duas linhas
+dizendo a mesma coisa — podendo discordar — são inrepresentáveis. É o argumento
+do §5 outra vez: quem recusa é o banco, não uma checagem que o segundo caminho
+de código esquece.
+
+**Quem ordena é o `least()`/`greatest()` do Postgres, não o Rust.** Se o Rust
+ordenasse, a comparação que produz a linha e a que o CHECK confere seriam duas
+implementações da mesma coisa, e o dia em que divergissem o INSERT falharia com
+erro de constraint sem ninguém entender o motivo.
+
+Cai fora disso um caso bonito: **se os dois se pedirem ao mesmo tempo, viram
+amigos.** O segundo INSERT cai no `ON CONFLICT`, vê que quem pediu foi o outro, e
+aceita. Não é caso de borda tratado — é a mesma regra lida de trás pra frente.
+
+### O aceite é o consentimento, porque não existe outro
+
+A decisão 2.2 do `IDEIAS.md` é forte e foi tomada por quem decide: amigo vê o
+que você está assistindo **agora**, o que largou no meio, o que terminou, suas
+notas. **Sem chave de privacidade.**
+
+Então o botão "aceitar" carrega tudo isso sozinho, e é por isso que ele existe —
+uma amizade unilateral, tipo seguir, faria qualquer conta do servidor abrir a sua
+estante sem você dizer nada. Recusar **apaga a linha** e não deixa marca: guardar
+a recusa serviria pra barrar um segundo pedido, o que num servidor de duas
+pessoas resolve um problema inexistente e cria um pior — quem pediu ficaria
+vendo "pendente" pra sempre sem saber que já levou não.
+
+### O que mudou de comportamento, e não só de nome
+
+| | antes | agora |
+|---|---|---|
+| escassez | uma cópia por caixa **por círculo** | uma cópia por caixa **no servidor** |
+| vitrine da semana | `md5(semana ‖ círculo ‖ id)` | `md5(semana ‖ id)` — **todo mundo vê a mesma loja** |
+| balcão | os membros do seu círculo | as pessoas do servidor |
+| notas na ficha | de quem entrou no mesmo grupo | de quem **aceitou** ser seu amigo |
+| mural | do grupo, igual pra todos | seu: você e seus amigos |
+| convite | pra um círculo | pro **servidor** |
+| acesso do convidado | empréstimo **+** ser membro do círculo | o empréstimo, que era o que sempre autorizou |
+| prazo e limite | colunas do `circulo` | `locadora_opcoes`, singleton do servidor |
+
+A segunda linha é a que mais muda a alma da coisa. O círculo entrar no hash era o
+que dava a ele razão de existir antes de haver empréstimo — cada grupo tinha sua
+vitrine. Com uma loja só isso vira o contrário do que a vitrine serve: **a caixa
+da semana é a mesma pra todo mundo**, e por isso é assunto em comum, do mesmo
+jeito que o guia é igual pra todos (`IDEIAS.md` §2.4).
+
+### Prazo e limite não voltaram a ser `const`
+
+A 0021 escreveu que *"um número de regra de negócio escondido em `const` é um
+número que ninguém encontra"*, e isso não deixou de valer só porque o dono das
+colunas sumiu. Elas migraram pra `locadora_opcoes`, um singleton imposto pelo
+banco (`unica boolean PRIMARY KEY CHECK (unica)`), herdando os valores que a casa
+tinha em vez de recomeçar no padrão. É a semente da tela de opções da fase 2.
+
+### O que esta fase deliberadamente NÃO fez
+
+**O mural continua contando só o que foi terminado.** A decisão 2.2 reverte isso,
+e o §41 registra a poda como se fosse posição do projeto — não é. Mas trocar o
+escopo e o conteúdo na mesma fase esconderia duas mudanças de comportamento atrás
+de um commit só. Cai na fase 6, junto com posts, comentários, presença e mensagem.
+
+**A presença fechada (§42) continua fechada**, pelo mesmo motivo e no mesmo lugar
+da fila.
+
+### Verificação
+
+| | |
+|---|---|
+| migração | 0028 aplicada; `circulo` e `circulo_membro` **não existem mais** |
+| amizade preservada | 1 linha, `rudney + sam`, aceita — semeada da associação antiga |
+| pedir · repetir · aceitar · desfazer | `enviado` · `ainda não respondeu` · `agora vocês são amigos` · 404 no segundo DELETE |
+| pedido mútuo simultâneo | vira amizade aceita, sem passo extra |
+| pedir a si mesmo | 400, `você já se tem` |
+| escassez sem grupo | um usuário aluga, o outro leva **"Fulano está com esta"** |
+| convidado | `guest` com a fita na mão: **206**; depois de devolver: **403**; morador: 206 |
+| nota na ficha | invisível pra quem não é amigo, visível **no instante** em que a amizade é aceita |
+| telas | mural e locadora conferidos por screenshot; balcão some quando não há o que dizer (§24) |
+| testes · typecheck | **206 passam** (2 novos) · `tsc --noEmit` limpo |
+| dados de teste | conta `r28teste` e as sessões criadas foram **apagadas**; 2 usuários, 0 empréstimos, 0 avaliações, e o último `play_event` é anterior à sessão |
+
+## 45. R29 — quarenta caixas, e a chave que desliga a escassez sem virar um `if`
+
+A R20 (§36) fez a coisa certa com o número errado. Ela cortou a vitrine porque
+seiscentas caixas são uma parede, e o corte foi **16 por estante** — 166 caixas
+expostas. A escala pedida estava escrita:
+
+> A locadora tem **~40 caixas na loja inteira** por semana — não 40 por estante.
+> O que não está no estoque não existe até o estoque virar.
+
+166 não é uma loja pequena. É uma loja.
+
+### O corte deixou de particionar, e isso muda a silhueta
+
+A mudança inteira é a ausência de duas palavras:
+
+```sql
+row_number() OVER (PARTITION BY a.estante ORDER BY md5(semana || id))  -- R20
+row_number() OVER (                       ORDER BY md5(semana || id))  -- R29
+```
+
+Cortar por estante dá **a mesma vitrine toda semana com conteúdo trocado**:
+doze placas, dezesseis caixas cada, sempre. Isso é catálogo paginado com nome de
+loja. Sorteando na loja inteira, a estante deixa de ser cota e vira endereço — é
+só onde cada caixa foi cair.
+
+Medido no acervo real, com estoque 40, na semana de 03/08:
+
+| | |
+|---|---|
+| caixas | 40, em **11 estantes** |
+| Ficção científica | 9 de 115 |
+| Terror | 6 de 113 |
+| Crime e suspense | 8 de 52 |
+| Romance · Guerra · Drama | 1 cada |
+| **Faroeste** | **não existe esta semana** |
+
+O faroeste tem 3 caixas no acervo; numa semana ele aparece, na outra não. **A
+loja muda de forma**, e não só de conteúdo — que é o que uma loja pequena faz.
+
+### O número que a tela somava errado
+
+A porta da loja dizia *"597 no acervo"* de 600, e o defeito só apareceu porque a
+primeira semana sorteada não contemplou o faroeste: a tela somava os `total` das
+estantes **que vieram na resposta**, e a estante ausente levou o acervo dela
+junto.
+
+É o §14 outra vez — o "Biblioteca 300" que escondia o denominador — e o §30 — o
+botão que dizia "ver as 644" e abria 1.424. **Toda vez que a tela recalcula um
+número que o servidor já sabe, ele diverge.** O acervo passou a vir servido,
+numa janela `count(*) OVER ()` que roda antes do corte e custa um `bigint` por
+linha.
+
+### A chave de escassez, e por que ela não é um `if`
+
+Esta é a parte que quase deu errado. A opção pedida é *"escassez ligada ou
+não"*, e o jeito óbvio de implementá-la é ler a coluna no handler e pular a
+inserção conflitante. Isso **desmontaria o §35**:
+
+> *"quem recusa é o banco, não uma checagem que alguém pode esquecer de escrever
+> no segundo caminho de código"*
+
+Um `if` traz de volta a corrida entre a leitura e o `INSERT` que o índice único
+existe pra matar — e traz de volta justamente no primeiro código do projeto onde
+duas pessoas disputam a mesma linha de propósito.
+
+O predicado de um índice parcial não pode consultar outra tabela. Mas pode olhar
+uma coluna da própria linha. Então o empréstimo passou a **carregar o regime sob
+o qual nasceu**:
+
+```sql
+ALTER TABLE emprestimo ADD COLUMN exclusivo boolean NOT NULL DEFAULT true;
+
+CREATE UNIQUE INDEX emprestimo_uma_copia_work_idx ON emprestimo (work_id)
+    WHERE devolvido_em IS NULL AND work_id IS NOT NULL AND exclusivo;
+```
+
+Três coisas saem de graça, e a terceira é a que importa:
+
+* a regra continua sendo do banco, com a força de antes;
+* desligar a escassez **não afrouxa nada retroativamente** — a fita que saiu sob
+  o regime exclusivo continua exclusiva até voltar, o que é honesto: ela está
+  com alguém;
+* ligar de volta não invalida os empréstimos duplicados que existirem, e nenhum
+  estado impossível precisa ser inventado.
+
+**E uma regra que era subproduto virou explícita.** "Ninguém pega a mesma caixa
+duas vezes" era consequência do índice acima: se só há uma cópia em aberto,
+ninguém tem duas. Desligada a escassez, deixa de ser — e sem o índice novo
+`emprestimo_uma_por_pessoa_*` a mesma pessoa acumularia três cópias do mesmo
+filme, queimando o próprio limite.
+
+### A caixa alugada some, e o buraco fica
+
+A R19 desenhava a caixa emprestada na estante com uma cinta de papel por cima. A
+anotação original diz outra coisa: *"se alguém aluga, a caixa **some da
+prateleira** e volta quando devolve"*.
+
+**E o buraco não é preenchido.** Puxar outra caixa do acervo pra tapar o vão
+faria a loja ter 40 sempre, e aí levar uma fita não custaria nada a ninguém. O
+estoque da semana é o estoque da semana.
+
+Some quando o empréstimo **tranca** ou quando é **seu** — os dois casos em que a
+caixa não está ao seu alcance. Com a escassez desligada, a de outra pessoa
+continua exposta, e a cinta volta a ter função: *"fulano está com esta, e você
+também pode pegar"*. A cinta não foi removida; ela mudou de lugar.
+
+A porta da loja conta as três coisas separadamente, porque são três: **"39 na
+prateleira, 1 fora · 40 nesta semana, de 600 no acervo"**. Sem o "1 fora", quem
+viu 40 ontem conclui que a loja quebrou.
+
+### A tela que faltava
+
+Os quatro números viraram uma seção da aba `admin`, e cada campo diz **o que
+muda**, não o que é. "Estoque: 40" não informa nada a quem não escreveu o
+código; *"caixas expostas na loja inteira por semana — não por estante"*
+informa. É a mesma lição da placa que diz "3 de 113" em vez de "3".
+
+A validação continua sendo dos `CHECK` das migrações — repeti-la no handler
+criaria dois lugares pra discordar sobre o que é um prazo válido. O que o
+handler faz é traduzir a violação pra 400 em vez de deixar sair 500.
+
+### Verificação
+
+| | |
+|---|---|
+| migração | 0029 aplicada; `estoque = 40`, `escassez = true` |
+| vitrine | **40 caixas em 11 estantes**; com `estoque = 8`, 8 em 6 estantes |
+| faroeste | ausente na semana sorteada — e a placa não mente por isso |
+| acervo | **600**, servido; era 597 quando a tela somava |
+| escassez ligada | o segundo aluguel leva *"Fulano de Teste está com esta"* |
+| a mesma pessoa | *"esta já está com você"*, nos dois regimes |
+| escassez desligada | o segundo aluguel **passa**, e nasce `exclusivo = false` |
+| o que já estava fora | continua `exclusivo = true` depois de desligar a chave |
+| validação | `estoque = 0` → **400** com a frase dos intervalos; morador comum → **403** |
+| a prateleira | 39 na prateleira · 1 fora · 40 na semana · 600 no acervo |
+| telas | locadora e `admin` conferidas por screenshot |
+| testes · typecheck | **208 passam** (2 novos) · `tsc --noEmit` limpo |
+| dados de teste | conta `r29teste`, os 3 empréstimos e as sessões **apagados**; opções de volta em 40 · 7 · 3 · ligada |
+
+## 46. R30 — a fita é um objeto, e por isso rebobinar deixou de ser destrutivo
+
+Esta seção desfaz a recusa mais cara da série. O §35 escreveu:
+
+> *"A ideia original previa rebobinar a fita de outra pessoa — o que seria a
+> primeira ação destrutiva entre usuários que este projeto teria."*
+
+E a recusa **estava certa**, dado o modelo que existia. O erro não era ético,
+era de modelagem — e é a distinção que esta fase inteira depende de fazer.
+
+### O achado da R19 estava certo pela metade
+
+A 0021 comemorou, com razão:
+
+> *"o estado da fita já está no banco. `playback_state` guarda, por usuário e por
+> obra, onde a pessoa parou. Quem assistiu até o minuto 47 e devolveu deixou a
+> fita no minuto 47 — isso é literalmente verdade, não simulação."*
+
+A observação é boa. A conclusão não, e o furo só aparece quando se tenta fazer o
+que foi pedido:
+
+> **Uma fita é um objeto. `playback_state` é uma memória.**
+
+Enquanto a fita for a memória de alguém, três coisas quebram:
+
+* rebobinar a fita **é** apagar o "continuar de onde parou" de outra pessoa — e
+  aí a recusa do §35 é a única resposta possível;
+* a fita anda para trás sozinha: quem devolveu no minuto 47 e reassistiu amanhã
+  reescreve o passado, e foi preciso **congelar** `devolvido_como` no empréstimo
+  pra contornar isso;
+* e duas pessoas têm fitas **diferentes** da mesma caixa, que é a negação do
+  objeto.
+
+Separar as duas dissolve o problema inteiro em vez de contorná-lo:
+
+| | o que é | de quem é |
+|---|---|---|
+| `playback_state` | onde **você** parou | seu, privado, intocável |
+| `fita` | onde **a fita** está | do acervo, compartilhado |
+
+Rebobinar passa a mexer no objeto e em ninguém. **Nenhum `playback_state` é
+tocado no handler** — foi o primeiro fato que a verificação conferiu, e ele é a
+seção inteira em uma linha.
+
+### A fita anda enquanto se assiste
+
+Não só na devolução. É a leitura literal da segunda anotação — *"saber que
+estado deixou a fita para o próximo uso"* — e a consequência importa: **levantar
+no meio e sair já deixa a fita zoada**, tenha você alugado ou não. Um morador
+pode dar play sem passar pela locadora (§35), e continua podendo; o que ele não
+faz mais é sair sem deixar marca.
+
+O `INSERT ... ON CONFLICT` mora no mesmo lugar que grava o progresso — o único
+ponto de escrita que existe —, e um `WHERE w.year <= 1996` faz a coisa toda
+virar no-op para DVD sem nenhum `if`: disco não rebobina, ele lembra onde parou.
+
+### Você descobre quando põe pra tocar
+
+Cena a cena, como foi pedido. O estado da fita **não** vai junto com as 40 caixas
+da vitrine: é uma rota própria, chamada ao abrir a caixa e revelada só no play.
+Seria mais barato em requisições mandar tudo com a estante, e destruiria a única
+coisa que esta tela tem.
+
+O que aparece não é o filme — é o descuido de outra pessoa, com nome:
+
+> **ESTA FITA NÃO ESTÁ REBOBINADA** · `0:47:12` · *Fulano deixou assim · hoje*
+
+O nome está ali porque é o nome que faz o atrito existir. Uma fita no meio sem
+dono é um defeito do sistema; com dono é alguém que não rebobinou.
+
+### Rebobinar é obrigatório — quando a fita não é sua
+
+Decidido, e mais afiado que a proposta que estava no `IDEIAS.md` (que oferecia
+"dar play daqui"). Não há como passar: a fita de outra pessoa se rebobina antes,
+e os segundos que isso custa são o preço que o descuido dela cobra de você.
+
+**A ressalva é a única coisa que não foi decidida e sim inferida**, e está
+registrada aqui pra poder ser revertida: se foi **você** que deixou a fita no
+meio, não há obrigação — isso é a sua sessão continuando. Obrigar alguém a
+rebobinar o próprio filme porque saiu pra pegar água transformaria o tema em
+castigo, e o preview da decisão mostrava explicitamente a fita de outra pessoa.
+
+E os segundos são **de verdade**, proporcionais a quanto a fita andou: um segundo
+para cada doze minutos, entre 2,5s e 10s. Um VHS levava perto de dois minutos pra
+voltar uma fita inteira; dez segundos é a caricatura disso — longa o bastante pra
+irritar um pouco, curta o bastante pra ninguém sair da sala. *"Alguns segundos de
+verdade, mas sem ser massante."*
+
+### A confirmação sumiu, e a ausência é o argumento
+
+O botão tinha uma modal — *"rebobinar apaga o continuar de onde parou"* —, e ela
+era a regra do §22 aplicada corretamente: **o botão diz o que apaga, antes de
+apagar.** Agora ele não apaga nada de ninguém, e a modal não tem o que dizer.
+
+Pedir confirmação para um gesto que não destrói é a ceninha que ensina a clicar
+em "sim" sem ler — e aí a confirmação que **importa** também não é lida. A modal
+saiu porque a regra que a justificava deixou de se aplicar, e não apesar dela.
+
+### O log tem dois nomes
+
+> *"as pessoas saberem quem devolveu zoado e ter que rebobinar"*
+
+As duas metades da frase estão numa tabela só, e é por isso que ela guarda dois
+nomes: um rebobinar é sempre **um trabalho que alguém teve por causa de alguém**.
+`por` gastou os segundos, `de` deixou assim.
+
+Ler a reputação do estado atual da `fita` não serviria: ela só sabe da última
+pessoa, e esquece tudo no instante em que alguém rebobina — ou seja, esqueceria
+exatamente quando o fato acabou de acontecer.
+
+No balcão, cada pessoa carrega até três números, e **zero some** (§24):
+
+| | |
+|---|---|
+| `✕n` | fitas dela que alguém teve que rebobinar |
+| `⟲n` | fitas dos outros que ela rebobinou |
+| `n` | quantas caixas tem na mão |
+
+O segundo existe pra o primeiro não fazer de todo mundo réu. E quem tem fama
+continua aparecendo no balcão **mesmo sem nada na mão** — a reputação tem que
+sobreviver à devolução, senão ninguém carrega nada.
+
+`rebobinar a própria bagunça` não conta pra nenhum dos dois: o log guarda o fato
+inteiro, e é a **leitura** que filtra. Um log que mente por educação não é log.
+
+### Uma armadilha que custou uma migração
+
+A 0030 rodou pela metade: o binário do container não recompilou depois de eu
+editar o `.sql`, e o `sqlx::migrate!` aplicou a versão anterior — deixando a
+tabela sem uma coluna e o `_sqlx_migrations` com o checksum errado, o que faria
+toda execução seguinte falhar. É a armadilha que o `CLAUDE.md` já documenta, e
+ela morde mesmo quando se sabe dela.
+
+O conserto foi derrubar as duas tabelas, apagar a linha da migração e recompilar
+com `touch src/main.rs`. Só foi barato porque a fase tinha **um dia de idade**.
+
+### Verificação
+
+| | |
+|---|---|
+| migração | 0030 aplicada inteira, em segunda tentativa |
+| a semente | 1 fita real — *Ghost in the Shell* (1995) no minuto 59, deixada pelo `sam`. Não é seed de exemplo |
+| a fita anda | um usuário assiste até 47:12 → `fita` marca 2832s no nome dele |
+| **o `playback_state` alheio** | intacto em **2832** depois do rebobinar. É a recusa do §35 dissolvida, medida |
+| a fita | zerada, e `deixada_por` passa a ser quem rebobinou |
+| o log | `por = sam`, `de = fulano`, `segundos = 2832` |
+| `minha` | `false` pra quem chega, `true` pra quem deixou — é o que decide a obrigação |
+| rebobinar de novo | `{"rebobinadas": 0}`, sem escrever log |
+| DVD | 400: *"ele não rebobina, ele lembra onde parou"*; a rota da fita responde `vhs: false` |
+| reputação | `fulano ✕1` · `sam ⟲1` e 1 fita no meio agora |
+| a tela | conferida por screenshot, dirigida por ponteiro real do Marionette |
+| testes · typecheck | **209 passam** (2 novos) · `tsc --noEmit` limpo |
+| dados de teste | conta `r30teste`, o log, as duas fitas de teste e as sessões **apagados**; sobrou a fita real |
+
+### O que fica devendo
+
+A **animação de rebobinar a fita** que a anotação pede é hoje um ponteiro
+regressivo e um carretel que anda pra trás. É honesto e é pouco: falta o objeto
+girando, o ruído, o tranco no fim. Fica anotado junto com o menu de DVD (fase 4),
+que é a fase do mesmo tipo de trabalho.
+
+## 47. R31 — o menu de 2004, e o gênero que a locadora já sabia
+
+A R21 (§37) entregou um menu de disco funcional e sem alma: fundo em movimento,
+quatro itens, uma grade de miniaturas. O pedido é outro — *"realmente um menu de
+DVD clássico, com alma"*, com a edição especial de 2004 como referência. Esta
+fase é a diferença entre as duas coisas, mais dois defeitos relatados.
+
+### O primeiro bug tinha resposta pronta a três arquivos de distância
+
+> *"a música é igual em todos os filmes"*
+
+Duas causas somadas. O gênero chegava por um `SELECT … LIMIT 1` **sem
+ordenação** — o Postgres devolvia qualquer uma das até seis etiquetas do filme —
+e o sintetizador reduzia isso a **três variantes**, com dois regex sobrepostos.
+Medido: 218 dos 635 filmes caíam no mesmo par escala/raiz.
+
+A locadora já tinha resolvido exatamente esta pergunta. `ESTANTES` (§36) é uma
+lista **ordenada** de reivindicação, com os gêneros distintivos primeiro, e é por
+isso que *Alien* mora em ficção científica em vez de drama. Usar a mesma ordem
+aqui custa uma consulta com `unnest` e rende coerência de graça:
+
+> **o filme que mora na estante de terror abre um menu de terror.**
+
+Doze estantes viraram doze climas — escala, fundamental, andamento, timbre da
+melodia, timbre do colchão e corte do filtro. Nenhum é decorativo: tons inteiros
+em ficção científica porque nenhuma nota resolve; menor harmônica em crime porque
+a sétima maior dentro do menor é tensão sem susto; frígio em terror porque é o
+modo mais escuro que sete notas dão sem dissonância gratuita.
+
+Conferido em seis filmes: *Suspiria* → Terror, *Aladdin* → Infantil,
+*Independence Day* → Ficção científica, *Bom Dia, Vietnã* → Guerra, *Django
+Livre* → Faroeste, *Drive* → Crime e suspense.
+
+**O índice é o contrato**, e há teste: os dois arrays que viram `unnest($3,$4)`
+precisam ter o mesmo tamanho — `unnest` de arrays desiguais preenche o menor com
+NULL **em silêncio**, e o sintoma seria uma estante casando com o gênero errado.
+O menu abriria; só com a música de outro filme.
+
+### O segundo bug era metade CSS, metade grid
+
+> *"a lista de capítulos não rola"*
+
+`.menu-dvd` é `position: fixed` com `overflow: hidden`, e tem que ser — senão o
+palco 3D vaza pela viewport. Faltavam duas coisas: uma área de rolagem **dentro**
+(`overflow-y: auto` na grade) e um `min-height: 0` no palco, que é uma linha
+`1fr` de grid e sem isso assume a altura do conteúdo. Com as duas, um disco de
+trinta e sete capítulos declarados rola; sem, os últimos ficavam sob o rodapé.
+
+### A cena de fundo era determinística
+
+`duracao / 5.0`, fixo. Abrir o mesmo disco dez vezes dava o mesmo plano dez
+vezes, e a anotação original pede *"uma cena aleatória do filme rodando de
+fundo"*. Agora é sorteada **entre 15% e 75%** da duração: antes disso ainda há
+logo de estúdio, depois começa o desfecho. A janela é a mesma decisão de antes —
+agora com largura em vez de um ponto.
+
+### Capítulos, e a medição que não mudou nada
+
+Medido de novo, e o número piorou: **3 filmes de 635 têm capítulo no container, e
+nenhum tem nome.** O §37 tinha 13,5%; a realidade é 0,47%.
+
+Mesmo assim a grade passou a se chamar **capítulos**, numerada de 1 a 12. Isso
+não é o §18 sendo violado: o Odeon não está dizendo que o arquivo declarou
+capítulos — está **dividindo o filme em capítulos**, que é o que ele faz. A
+legenda continua dizendo de onde veio o corte (*"nos cortes do disco"* contra
+*"divididos pelo relógio"*), e o número no item de menu só aparece quando o disco
+o declarou. O que mudou é a palavra, e a palavra é a do objeto.
+
+### A experiência 2004, item a item
+
+**A vinheta.** Toda vez, e pulável — é o que os discos bons faziam; os ruins eram
+os que travavam o controle. Dois segundos e meio, quatro desenhos (risco, íris,
+onda, brilho) servindo os doze climas, e o que sempre muda é a tinta.
+
+E ela é **uma fase**, não uma camada: enquanto roda, o palco do menu não existe.
+A primeira versão montava os dois, e o print mostrou o defeito na cara — o título
+do filme e os itens legíveis por baixo da vinheta, que vira um borrão sobre um
+menu já aberto. É o oposto de pôr um disco.
+
+**Vídeo dentro dos itens.** Um `<canvas>` por item, todos pintados do mesmo
+`<video>` com recortes diferentes. Quatro elementos de vídeo seriam quatro
+decodificações — e aqui o fluxo é HLS transcodificado ao vivo, ou seja, quatro
+sessões de ffmpeg pra mostrar o mesmo plano. Um vídeo e quatro `drawImage` de
+360×72 custam uma. A janela só acende no item em foco: quatro ligadas ao mesmo
+tempo viram uma parede de vídeo, e aí não há foco nenhum.
+
+**A viagem até os capítulos.** Menu e capítulos são duas telas **no mesmo
+espaço**, e a transição move a câmera. `perspective` no palco, `translateZ` e
+`rotateY` nas telas: a que sai recua e desfoca, a que entra vem de trás. Antes o
+React trocava o conteúdo — e trocar conteúdo é o que uma aba faz.
+
+**A trilha costurada.** O colchão nunca para, e é ele que costura: a melodia
+recomeça, o pad não tem emenda. E a frase de oito notas passou a **continuar** a
+anterior em vez de recomeçar no primeiro grau — um contador de compasso, três
+linhas, e o loop deixa de soar como um bloco repetido.
+
+**O estilo saindo do filme.** A tinta do clima acende o item em foco e o número
+do capítulo, e convive com `--cor` (a cor dominante do filme) em vez de
+substituí-la: um menu de terror de um filme azul continua sendo daquele filme.
+
+**Sobre a paleta.** O §12 fechou as cores do produto, e as doze tintas são uma
+exceção deliberada, não um esquecimento. A decisão é explícita — *"comédia e
+terror não ganham o mesmo menu"* — e um menu de disco não é cromo do aplicativo:
+é a arte da edição especial, que nunca combinou com o resto da estante.
+
+E `prefers-reduced-motion` desliga a viagem. Alma não pode custar enjoo a quem
+pediu pra não ter movimento.
+
+### Verificação
+
+| | |
+|---|---|
+| clima | 6 filmes, 6 climas, cada um batendo com a estante da locadora |
+| a cena | 3 aberturas do mesmo disco: 2718s · 2291s · 1692s |
+| capítulos | grade numerada 1–12 com timecode, rolando; legenda diz de onde veio o corte |
+| vinheta | conferida em `clima-iris` (Moana → Animação), sozinha na tela |
+| menu | conferido em `clima-risco` (Pânico 2 → Terror): janela de vídeo no item em foco, tinta vermelha |
+| viagem | menu → capítulos por seta e Enter, com a câmera viajando |
+| testes · typecheck | **211 passam** (2 novos) · `tsc --noEmit` limpo |
+| dados de teste | só sessões, todas apagadas; nada escrito no acervo |
+
+### Duas coisas que a conferência ensinou
+
+**O Firefox headless atrasa animação de entrada.** Três prints saíram de uma tela
+com `opacity: 0` porque eu fotografava no instante do `mount`. O roteiro passou a
+**esperar o elemento aparecer** e só então contar o fade — adivinhar o instante
+deu print da estante três vezes.
+
+**E o print achou um bug que o código não denunciava.** A vinheta por trás do
+menu compilava, passava no typecheck e não quebrava teste nenhum. Só olhando.
+
+## 48. R32 — conquistas, e o placar que argumentava contra si mesmo
+
+O §40 registrou, com todas as letras, um argumento contra a gamificação:
+
+> *"Contar não é medir. Um filme de 4 minutos vale o mesmo que um de 3 horas
+> aqui — se este número começar a escolher o que você assiste, ignore-o."*
+
+Aquilo estava **impresso na tela**, dentro da feature. E o §40 tratou o
+argumento como posição do projeto quando ele era posição de quem escreveu,
+contra quem decide. O pedido é explícito desde a primeira anotação: *"algo
+parecido com as conquistas da Steam"* — XP, nível, camadas, muitas conquistas,
+comparação com amigos, títulos e customização.
+
+**O aviso sai.** Um produto que entrega uma feature e imprime na tela um pedido
+de desculpas por ela não entregou a feature — entregou a discussão sobre ela.
+
+### O XP é derivado, e é isso que faz tudo ser retroativo
+
+Não há tabela de pontos, ledger nem job de recálculo. O nível de alguém é uma
+**função** do que essa pessoa fez, lida na hora. Três coisas saem disso, e a
+primeira era uma decisão em aberto (`IDEIAS.md` §6.3):
+
+* **as conquistas são retroativas de graça.** Zero linhas de backfill: no dia em
+  que isto ligou, quem já tinha terminado dois filmes já tinha terminado dois
+  filmes;
+* nada desincroniza — um contador que soma a cada evento erra pra sempre no dia
+  em que um evento se perde;
+* apagar um empréstimo corrige o XP sozinho, em vez de deixar pontos órfãos de
+  um fato que não existe mais.
+
+É a **quinta** fase seguida em que a peça de schema prevista não nasce (§38
+registrou três, §41 a quarta). O banco guarda só o desbloqueio: a chave e o
+instante.
+
+**Medido antes, e o número tempera a expectativa:** 129 eventos, de uma pessoa
+só, 18 obras, **2 terminadas**. Retroativo abriu exatamente duas conquistas — *A
+primeira fita* e *Não está sozinho*. A lista foi escrita para o histórico que ela
+vai criar, não para o que existe, e é honesto que ela comece quase toda trancada:
+uma lista que abre cheia não é uma lista, é troféu de participação.
+
+### Duas consultas, e não setenta e duas
+
+Avaliar cada regra com a sua própria consulta seria uma ida ao banco por
+conquista, a cada leitura de perfil. O avaliador levanta os **fatos** de uma
+pessoa — contagens, máximos, sequências — em duas consultas, e as regras são
+funções em cima dessa estrutura. Uma regra nova é uma linha, e só custa consulta
+se pedir um fato que ainda não existe.
+
+### A lista, e por que a camada é que vale pontos
+
+Setenta e duas conquistas, em seis camadas. Os pontos são **fixos por camada** e
+não por linha: um número por conquista seriam setenta e duas decisões
+arbitrárias, e a primeira coisa que alguém faria é comparar duas e achar uma
+injusta. A camada **é** a dificuldade.
+
+| camada | pontos | pra quê |
+|---|---|---|
+| fáceis | 10 | dopamina — a lista não pode abrir vazia |
+| médias | 40 | o corpo: pedem hábito, não façanha |
+| sagas | 80 | trilogias e coleções |
+| difíceis | 150 | pedem meses |
+| impossíveis | 1000 | **não são pra ser desbloqueadas** |
+| marcos de nível | 0 | se abrem sozinhos ao subir |
+
+O marco de nível não vale XP, e há teste: valer daria XP por ter XP, e o nível
+subiria sozinho até o fim da lista — um laço com cara de recompensa.
+
+**As impossíveis existem de propósito.** *Zerou o Odeon* pede as 17.498 obras.
+Um acervo desse tamanho precisa de fundo do poço visível; sem ele, "difícil" vira
+o teto e a lista acaba.
+
+**E o outro lado da fita está lá.** *Devolveu zoado* — deixar 10 fitas no meio pra
+outra pessoa rebobinar — é conquista, com tag. Não é castigo: é fato sobre pessoa
+real, que foi o que a R30 (§46) construiu, e a tag é escolha de quem a tem.
+
+### A curva do nível
+
+Triangular: o nível `n` começa em `50·n·(n−1)`. Linear faria o número virar uma
+segunda contagem de filmes, dizendo o que "127 obras" já dizia; exponencial
+deixaria metade dos níveis inalcançáveis, porque a lista **tem fundo** — o XP
+máximo fica perto de 8.000. Há teste que fecha a curva com a sua inversa nos dois
+sentidos: se elas divergirem, a barra do perfil enche antes ou depois de o nível
+virar, e o número passa a mentir sobre o próprio progresso.
+
+### O perfil, e onde a comparação mora
+
+Título e tags são **chaves de conquista**, não texto livre, e quem valida é o
+código — o banco não conhece a lista e não deve conhecer. Um título não
+desbloqueado devolve **403**, e não é descartado em silêncio: descartar mostraria
+sucesso na tela e deixaria o perfil diferente do que a pessoa mandou.
+
+E a tela nunca oferece o que a validação vai recusar: o servidor manda a lista
+dos títulos e tags já abertos. Levar 403 escolhendo de um menu que o produto
+mostrou seria o produto mentindo pra si mesmo.
+
+A **bio** é a exceção declarada — foi pedida junto ("as duas coisas"), e ela
+convive com as tags de propósito: as tags dizem o que você fez, a bio diz o que
+você quer dizer. O risco conhecido, a bio roubar a atenção do que foi
+conquistado, é resolvido no tamanho: 140 caracteres, uma linha.
+
+**A comparação com os amigos mora dentro do perfil.** O §40 separou o placar "pra
+a decisão ser reversível", e o efeito foi ele ficar escondido numa aba que
+ninguém abria. A reversibilidade era real — apagar o placar custou um arquivo e
+uma linha, exatamente como previsto —, mas o preço foi a feature não existir. A
+comparação fica onde alguém vai olhar.
+
+### As sagas, e a dívida que elas pagam
+
+O `IDEIAS.md` §7 registrava: *"sagas de filme não existem como dado.
+`belongs_to_collection` do TMDB não é buscado. Pré-requisito das conquistas de
+saga."* Os 007, Alien, De Volta para o Futuro existiam como **pasta no disco**.
+
+A dívida era de dados, não de schema: `collection.kind` aceita `'franchise'`
+desde a migração original. **O modelo de grafo do §1 previu a saga antes de
+alguém precisar dela**, e é a segunda vez que essa aposta paga — a primeira foi a
+ordem alternativa de exibição. Nenhuma tabela nasceu; um job preencheu.
+
+E ele reusa a chamada do §38: `belongs_to_collection` vem na **mesma resposta**
+que a ficha de produção. Dois módulos porque são dois jobs com retomadas
+diferentes; uma chamada por filme porque pedir duas vezes seria pagar dobrado
+pela mesma linha.
+
+| | |
+|---|---|
+| filmes consultados | 548 |
+| entraram numa saga | **315** |
+| sagas distintas | **133** |
+| falhas | **0** |
+| maiores | James Bond (18) · Sexta-Feira 13 (10) · Harry Potter (8) |
+
+**O falso negativo é assumido:** filme sem saga continua elegível e será
+perguntado de novo na próxima rodada. Marcá-lo exigiria schema pra guardar
+ausência, que é o que o §38 recusou pelo mesmo motivo.
+
+### Verificação
+
+| | |
+|---|---|
+| migração | 0031 aplicada (em segunda tentativa — ver abaixo) |
+| retroativo | 2 conquistas abriram sozinhas, sem backfill: *A primeira fita*, *Não está sozinho* |
+| XP · nível | 48 XP, nível 1, `2 de 72` conquistas |
+| título não desbloqueado | **403**, com a frase |
+| tag não desbloqueada | **403**, nomeando a tag |
+| bio livre | 200 |
+| sagas | **133** criadas de 548 filmes, 315 filmes ligados, 0 falhas |
+| placar | sam e rudney, ordenados por XP, com a própria linha marcada |
+| testes · typecheck | **217 passam** (7 novos) · `tsc --noEmit` limpo |
+| o aviso | **removido**, junto com `placar.rs` e `Placar.tsx` |
+
+### A armadilha do `sqlx::migrate!` mordeu de novo
+
+Segunda vez em duas fases. O container aplicou uma versão da 0031 anterior à
+edição, e a seguinte falhou com *"migration 31 was previously applied but has
+been modified"* — o servidor não sobe mais até alguém intervir.
+
+Já está no `CLAUDE.md`, já está no §46, e mordeu de novo. **A lição não é
+lembrar melhor**: é que editar um `.sql` já aplicado é uma operação sem rede, e o
+`touch src/main.rs` tem que vir *antes* de qualquer reinício, não depois de
+notar o estrago.
+
+## 49. R33 — a rede social, e as duas podas por privacidade que ela desfaz
+
+Duas seções deste documento chamaram de vazamento o que a visão chama de
+feature. O §41 escreveu que o mural conta *"o que terminou, não o que abriu"*,
+porque *"anunciar cada coisa que se provou e abandonou é vigilância com cara de
+recurso social"*. O §42 fechou a rota que diz quem está assistindo o quê.
+
+A decisão 2.2 do `IDEIAS.md` é explícita e contrária: **amigo vê o que você está
+assistindo agora, o que largou no meio, o que terminou, suas notas. Sem chave de
+privacidade.**
+
+**Nenhuma das duas seções era burra**, e vale dizer por quê: as duas foram
+escritas quando o escopo era um "círculo" que podia ter um convidado dentro, e
+ali a preocupação fazia sentido — você não escolhia quem entrava. Com **amizade
+que se aceita** (R28, §44), o aceite *é* o consentimento: você só aparece pra
+quem deixou entrar. A poda não foi revertida por capricho; ela perdeu a premissa.
+
+### O que sobreviveu da poda, e é o argumento que ninguém tinha lido direito
+
+O §41 tinha **dois** motivos, e só um caiu. O que caiu foi a privacidade. O que
+fica é o volume: um feed sobre `play_event` cru seria um log — 128 linhas dizendo
+*"sam abriu Drive"* dezoito vezes, e ruído ensina a não olhar (§24).
+
+Então as fontes novas não são o log cru:
+
+| fonte | o que a impede de virar log |
+|---|---|
+| `assistindo` | **uma linha por pessoa** — o que está rodando agora, não o histórico |
+| `largou` | não terminada, **entre 5% e 85%**, e parada há **mais de um dia** |
+| `postou` | é digitado por gente; não tem volume automático |
+
+A terceira condição do `largou` é a que separa "abandonou" de "foi fazer café".
+Conferido no acervo: *Ghost in the Shell* a 71% e *Drive* a 61% estão na janela
+de fração, e **não aparecem** — pararam há 12h e 13h. A regra está funcionando
+justamente quando não mostra nada.
+
+### A presença não vem do transcode, e isso é uma correção
+
+O §42 fechou `/api/transcode/sessions` chamando-a de vazamento. Ela continua
+fechada — mas o motivo mudou: ela é o **pior** dos dois sinais disponíveis.
+
+Só enxerga quem está transcodificando, e o §3 decidiu que aqui o caso comum é
+**Direct Play**. Uma lista de presença construída sobre ela diria que ninguém
+está vendo nada na maior parte do tempo — teria sido uma feature quebrada e
+ninguém saberia dizer por quê.
+
+Os dois sinais honestos já estavam no banco desde sempre:
+
+| pergunta | fonte | corte |
+|---|---|---|
+| está online? | `auth_session.last_seen_at` | 5 minutos |
+| está assistindo? | `playback_state.updated_at` | **90 segundos**, o mesmo da locadora (§35) |
+
+Os cortes são diferentes de propósito, e há teste pros dois. `last_seen_at` é
+tocado por requisição, e quem está lendo a ficha de um filme passa minutos sem
+pedir nada — um corte de 90s ali faria a lista piscar.
+
+### Três tabelas, e é a primeira vez em muito tempo
+
+As cinco fases anteriores previram peça de schema e não criaram nenhuma (§38,
+§41, §48). Esta cria três, e a diferença é simples: feed, XP e conquista são
+**leituras** de fatos que já existiam; post, comentário e mensagem são **fatos
+novos**. Ninguém deriva um texto que uma pessoa escreveu.
+
+### O comentário serve os dois alvos, e é uma tabela só
+
+Decidido: comentário existe **no post e na review** (`IDEIAS.md` §6.2, que estava
+em aberto). Post sem comentário é diário, não rede social; e a review foi pedida
+com *"as pessoas podem comentar"* explícito.
+
+Duas tabelas quase idênticas seriam duas telas, duas rotas e duas chances de
+divergirem sobre o que é um comentário. Uma tabela com **alvo polimórfico** e
+CHECK garantindo exatamente um é o mesmo padrão que `emprestimo` usa desde a 0021
+— e pelo mesmo motivo: as duas pontas mantêm chave estrangeira de verdade.
+
+A review é apontada pelo par `(quem, qual filme)`, que é a chave primária de
+`avaliacao`. Inventar um id só pra ser apontado trocaria a identidade natural por
+uma sintética.
+
+### A única restrição da fase inteira
+
+**Mensagem direta só entre amigos.** Não é privacidade sobre o que você assiste —
+a decisão 2.2 abriu isso. É que mensagem de estranho é o mecanismo pelo qual toda
+rede social vira desagradável, e a amizade aqui já tem aceite: quem quer falar
+com você pede amizade primeiro, que é uma tela e um clique.
+
+E o evento do barramento leva **só o aviso, não o texto**: o `EventSource` é
+aberto a todos os aparelhos autenticados, então mandar o conteúdo entregaria a
+conversa a quem não é dela. Cada cliente descarta o que não é seu pelo `para` —
+o mesmo padrão do `ProgrammeStarting` (§25).
+
+### A aba subiu de nível
+
+*"Uma aba separada, que talvez venha a ser algo separado do Odeon."* Ela saiu de
+dentro de "experimentação" e virou primeiro nível, com três salas: **mural**
+(feed + caixa de post + presença), **conversas** e **gente** (amigos, pedidos e
+busca). É o que a deixa pronta pra um dia sair daqui sem arrastar a locadora
+junto.
+
+### Verificação
+
+| | |
+|---|---|
+| migração | 0032 aplicada **de primeira** — o `touch src/main.rs` veio antes do restart |
+| post · comentário | criados por duas contas diferentes, o comentário aparece embutido no feed |
+| alvo duplo | **400**: *"comente num post ou numa review, exatamente um"* |
+| presença | rudney como amigo, sam como eu, ninguém assistindo — e a luz é o que diz "online" |
+| mensagem | entregue; a conversa do rudney mostra 1 não lida |
+| mensagem a não-amigo | **403**: *"vocês precisam ser amigos pra conversar"* |
+| busca | `?q=rud` → rudney, com a relação junto |
+| `largou` | 0 hoje, e **corretamente**: as duas candidatas pararam há 12h e 13h |
+| telas | mural, gente e conversas conferidas por screenshot |
+| testes · typecheck | **219 passam** (2 novos) · `tsc --noEmit` limpo |
+| dados de teste | post, comentário, mensagem, a conta `r33teste` e as sessões **apagados** |
+
+## 50. R34 — a revista da semana, e o LLM que só costura
+
+O §30 entregou um **índice**: cartões por diretor, elenco, compositor, gênero,
+década e país, cada um cruzado com o seu histórico. É simples e é útil — e é uma
+enciclopédia, não uma revista.
+
+O pedido é outro: *"um guia dinâmico, que muda de temática por dia ou semana,
+faz eventos de um filme ou saga específica para incentivar as pessoas a
+assistir, e usa o acervo para ensinar história do cinema. Útil, não decorativo.
+Igual para todo mundo, para haver assunto em comum."*
+
+**O índice não morreu.** Ele desceu, e virou a parte de consulta atrás da capa —
+que é a diferença entre uma enciclopédia e uma revista: a enciclopédia continua
+ali, só não é o que se vê ao abrir.
+
+### Igual pra todo mundo, e por isso sem tabela
+
+O tema e o evento são `md5(semana || eixo)` sobre o acervo, com a **mesma
+semente semanal da locadora** (§36) — e portanto viram na mesma segunda-feira.
+Duas visitas na mesma semana veem o mesmo tema; duas pessoas veem o mesmo tema;
+e não há nada pra sincronizar nem pra expirar.
+
+Isso é o §2.4 do `IDEIAS.md` virando código: **o guia é coletivo de propósito**,
+porque é o que dá assunto em comum. Os desafios (fase 8) são o oposto —
+sorteados por pessoa.
+
+Terceira vez que o truque paga: emissora (§25), vitrine (§36), guia.
+
+**Cinco eixos, e nenhum inventado pra esta fase**: gênero e década do M2, país do
+§38, diretor do M1, **saga da R32** — a dívida que a fase 5 pagou já rendendo.
+Medido: 27 gêneros, 33 países, 66 diretores com 3+ filmes e 44 sagas com 3+. Há
+material pra um ano sem repetir, e há teste que confere que os cinco eixos saem
+ao longo de 52 semanas — um sorteio que caísse sempre no mesmo faria a revista
+ter um tema só.
+
+### O LLM entra, e a arquitetura é a ressalva
+
+O §18 é o pilar mais citado deste documento, e foi usado duas vezes pra recusar
+geração de texto — trivia (§32) e retrospectiva (§40). **As duas recusas
+continuam de pé:** fato sobre filme, nunca. Trivia inventada sobre um filme que
+alguém ama continua sendo pior que nenhuma.
+
+O que a decisão 2.3 abriu é outra coisa — **conteúdo editorial** —, com uma
+ressalva que é o desenho inteiro:
+
+> *"O sistema manda os fatos, o LLM escreve a costura."*
+
+A lista de filmes, anos e diretores sai do **banco**. O modelo recebe essa lista
+pronta e redige em volta. Ele **nunca** é perguntado *"quais filmes de terror
+existem?"*, porque a resposta a essa pergunta é exatamente o que ele inventaria
+com confiança. O `SISTEMA` repete a proibição em três linhas, mas a garantia não
+é o prompt: é o fato de ele não ter de onde buscar.
+
+E o que sai leva **selo** — o nome do modelo, na tela, como a curiosidade da
+Wikipédia leva o crédito (§32). Quem lê tem direito de saber que aquele
+parágrafo não foi escrito por gente.
+
+### Sem chave é um estado normal, e ele foi exercitado antes da chave existir
+
+A integração lê `GROQ_API_KEY` do ambiente, e sem ela a capa mostra o tema e os
+filmes (que são fato do banco) e **omite o ensaio** — o §18 e o §24 na mesma
+decisão: não inventar, e não escrever "em breve" no lugar. O ensaio é gerado
+**fora da requisição**, então a capa nunca espera por um modelo.
+
+A fase foi entregue nesse estado, com o buraco declarado. A chave chegou depois,
+e o resto desta seção é o que aconteceu quando ela chegou.
+
+### O primeiro ensaio foi honesto e inútil
+
+Com a chave posta, o texto saiu na primeira visita. A auditoria da ressalva
+passou limpa — **zero filmes inventados, zero anos inventados, zero diretores
+inventados**. E o texto era isto:
+
+> *"Romance é o tema da semana. Temos alguns filmes que se encaixam nesse gênero,
+> como Será Que?, dirigido por Michael Dowse (…) Esses filmes estão disponíveis
+> em nossa locadora para alugar."*
+
+Nada falso, e nada aprendido. Ele abre com a frase que o próprio prompt proibia e
+fecha com enchimento de catálogo. O `IDEIAS.md` §3.1 pede o contrário: *"usa o
+acervo para ensinar história do cinema. **Útil, não decorativo**."*
+
+**A culpa era dos fatos, não do modelo.** Ele recebia título, ano e diretor — e
+com três colunas não há o que dizer além de listar. Um modelo só escreve sobre o
+que recebe.
+
+### O conserto foi dar material, não pedir esforço
+
+Entraram no prompt o **país** de cada filme e, principalmente, uma seção de
+**ligações medidas no acervo**: o intervalo de anos, as décadas que concentram,
+o país que mais aparece, quantos a pessoa já viu, e **quantos filmes o tema tem
+ao todo** — o mesmo denominador da placa que diz "3 de 113" (§14).
+
+Nada disso é opinião: são todos `SELECT`s. O que o modelo faz continua sendo só a
+costura. E o `SISTEMA` ganhou uma lista do que é enchimento, com as frases exatas
+que a primeira versão produziu.
+
+O segundo texto abre por uma observação sobre o conjunto:
+
+> *"O que estes filmes têm em comum é a variedade de décadas em que foram
+> produzidos, desde os anos 80 até 2013. Aladdin, de 1992, é um clássico da
+> animação romântica, enquanto Sim Senhor, de 2008, traz um toque de comédia ao
+> gênero."*
+
+Auditado: **quatro anos citados, os quatro da lista**; três títulos, os três da
+lista; nenhum nome próprio fora dela.
+
+Ainda não é ótimo — o fecho *"mostram a diversidade do tema"* é enchimento que
+sobreviveu. Mas mudou de natureza: é específico, é verificável, e ensina alguma
+coisa sobre o recorte. A diferença entre as duas versões não foi um prompt mais
+insistente; foi **ter o que dizer**.
+
+### O evento
+
+Um filme ou uma saga em cartaz na semana — saga primeiro, porque foi o pedido e
+porque uma saga dá o que fazer a semana inteira enquanto um filme dá duas horas.
+
+Participar é **terminar durante a janela**: o mesmo sinal do §8f que a curadoria,
+a locadora, o mural e as conquistas já usam. Uma sexta definição de "participou"
+seria uma sexta chance de discordarem.
+
+Ele amarra a revista com o resto da sequência: dá **XP e quatro conquistas
+novas** (fase 5), e quem participou aparece pra todo mundo na capa — que é o
+ponto de ele ser coletivo.
+
+**Duas tabelas, e as duas se justificam por não serem deriváveis.** O `ensaio` é
+cache de uma função cara; apagá-lo só custa gerar de novo. A
+`evento_participacao` congela o que a janela não deixa recuperar: a semana passa,
+o tema vira, e *"terminou enquanto estava em cartaz"* deixa de ser recuperável.
+É a mesma razão pela qual `emprestimo.devolvido_como` é congelado (§35).
+
+### O defeito que a verificação encontrou
+
+`avaliar` (conquistas) rodava **antes** de `talvez_participou`. Compilava,
+passava nos testes e funcionava — só que a conquista *Esteve lá* abria na **ação
+seguinte**: a pessoa terminava o filme do evento e a medalha aparecia amanhã,
+quando clicasse em outra coisa.
+
+Trocar a ordem é uma linha. Encontrar exigia terminar um filme de verdade e
+olhar a resposta. **Conferido depois da troca:** *A primeira fita* e *Esteve lá*
+chegam no mesmo gesto.
+
+### Verificação
+
+| | |
+|---|---|
+| migração | 0033 aplicada de primeira |
+| a capa | eixo `genero`, tema **Romance**, 8 filmes com ano e diretor |
+| o evento | saga **Dr. Dolittle: Coleção**, 2 obras |
+| participação | terminar uma obra da saga registrou a linha da semana |
+| a ordem | conquistas *A primeira fita* + **Esteve lá** no mesmo gesto, depois do conserto |
+| coletivo | o participante aparece na capa de outra pessoa |
+| XP | 52 = 20 de conquista + 32 de atividade, com o evento valendo 20 |
+| ensaio, sem chave | **ausente**, e a seção some — a tela não inventa nem escreve "em breve" |
+| ensaio, com chave | escrito na primeira visita, com selo `llama-3.3-70b-versatile` |
+| **a ressalva** | auditado nas duas versões: **0 filmes, 0 anos e 0 diretores inventados** |
+| o índice | intacto, abaixo da capa |
+| testes · typecheck | **222 passam** (5 novos) · `tsc --noEmit` limpo |
+| dados de teste | conta `r34teste`, participação e sessões **apagadas** |
+
+## 51. R35 — os desafios, e o fim da lista
+
+O último dos onze itens, e o único que nunca tinha sido construído.
+
+> *"Tarefas com prazo, que dão experiência. Mais simples que os temas do guia, e
+> sorteadas para cada pessoa — não são iguais pra todos. A cadência é escolhida
+> pela pessoa, entre algumas opções definidas."*
+
+### O oposto do guia, e o §2.4 no schema
+
+A decisão 2.4 separa as duas coisas numa tabela de duas colunas: **coletivo**
+(guia da semana, eventos) contra **individual** (desafios, XP, conquistas). Isso
+aparece direto na modelagem:
+
+| | guia (§50) | desafio |
+|---|---|---|
+| quem vê | todo mundo, o mesmo | cada um o seu |
+| onde mora | derivado, sem tabela | tabela |
+| por quê | recalculável de `md5(semana)` | a janela de cada um começa num instante diferente |
+
+E há um segundo motivo: **"cumpriu dentro do prazo" deixa de ser recuperável
+quando o prazo passa.** É a mesma razão da `evento_participacao` (§50) e do
+`emprestimo.devolvido_como` (§35) — três vezes o mesmo argumento, e ele continua
+sendo o único que faz uma tabela nascer neste projeto.
+
+### Três por janela, e o terceiro é o que justifica a fase
+
+| fatia | XP | o que faz |
+|---|---|---|
+| **fácil** | 15–20 | dopamina — e não é só assistir: avaliar, alugar, resenhar e rebobinar entram |
+| **tema** | 30 | um gênero, uma década, uma fita |
+| **empurrão** | 50 | o que você **nunca** viu: um país, um diretor, um gênero inédito |
+
+O terceiro é o único que faz o desafio servir ao **terceiro pilar** (§1). Sem
+ele, um sistema de tarefas sorteadas do seu próprio gosto só reforça o gosto — e
+aí ele é entretenimento, não curadoria.
+
+**A semente é da pessoa, da janela e da cadência.** É o que faz o desafio ser
+individual onde o guia é coletivo, com o mesmo mecanismo de sorteio
+determinístico.
+
+### Falhar não custa nada, e isso é uma decisão
+
+A janela fecha, o desafio some, outro é sorteado. Sem perda de XP, sem sequência
+quebrada, sem aviso.
+
+A alternativa considerada — uma sequência que zera ao falhar — é o motor mais
+forte que esse tipo de sistema tem, e é exatamente por isso que foi recusada.
+**Este projeto tem uma punição só, e ela é social**: a fita mal devolvida (§46).
+Ela funciona porque é entre pessoas e porque o atrito é a graça. Punir alguém por
+não ter assistido um filme é o placar do §40 voltando com outra roupa.
+
+A tela segue a decisão: sem barra de progresso, sem contador de aproveitamento,
+sem vermelho. Uma tela que sugere cobrança cobra, mesmo que o código não cobre.
+
+### Sem job, de novo
+
+A geração acontece **na leitura**, e é idempotente pelo `UNIQUE` da tabela: abrir
+a tela duas vezes na mesma janela não sorteia dois conjuntos. Um processo de
+fundo pra criar três linhas quando alguém abre uma tela seria uma peça a mais
+pra quebrar — é a mesma decisão que pôs a devolução automática da locadora na
+leitura (§35) em vez de num daemon.
+
+### O defeito que só existe às segundas-feiras
+
+Todas as cadências são ancoradas na **segunda-feira local**, como a vitrine
+(§36) e o guia (§50). A âncora está certa: sem ela, a janela de cada pessoa
+flutuaria a partir do dia em que ela escolheu a cadência.
+
+Mas numa segunda-feira a janela **diária e a semanal começam no mesmo
+instante**. E como a identidade da linha era `(user_id, comeca_em, chave)`,
+trocar de cadência naquele dia não gerava nada — o `ON CONFLICT DO NOTHING` via
+as linhas de antes e desistia.
+
+O sintoma é discreto, e por isso pior: os desafios apareciam, o botão dizia
+"todo dia", e o prazo continuava sendo o de domingo. **Ninguém veria isso como
+defeito — veria como o produto ignorando a escolha.**
+
+A cadência entrou na chave (0035). Duas janelas que começam juntas e duram
+tempos diferentes são duas janelas.
+
+E ele só existia **um dia por semana**. Encontrado porque a verificação caiu
+numa segunda-feira e eu troquei a cadência pra ver o que acontecia — não porque
+algum teste soubesse perguntar isso.
+
+### Verificação
+
+| | |
+|---|---|
+| migrações | 0034 e 0035 aplicadas |
+| sorteio | três por pessoa, **diferentes entre as duas contas** |
+| idempotência | duas chamadas na mesma janela → 6 linhas para 2 pessoas, não 12 |
+| cumprimento | terminar um filme de Crime fechou o desafio **e** abriu *Topou* no mesmo gesto |
+| XP | 62 = 20 de conquista + 12 de atividade + **30 da linha do desafio** |
+| cadência | as três trocam; a diária vence amanhã, a semanal na segunda |
+| o defeito | corrigido e conferido: trocar pra diária numa segunda passou a gerar janela nova |
+| a janela | 5 testes travam a âncora, a prova dentro do prazo e a semente |
+| testes · typecheck | **229 passam** (11 novos) · `tsc --noEmit` limpo |
+| dados de teste | conta `r35teste`, desafios, perfis e sessões **apagados** |
+
+### O fim da sequência
+
+As oito fases do `IDEIAS.md` §5 estão feitas. Os onze itens das anotações
+originais têm resposta, e as cinco perguntas em aberto da §6 foram respondidas —
+todas por quem decide, nenhuma por quem programa.
+
+O que fica em aberto está registrado no lugar certo e não disfarçado: **os
+clientes Kotlin pararam no M2** e não conhecem nada do que foi construído hoje;
+e **não há CI** — 229 testes que ninguém roda automaticamente.
+
+*(A chave do Groq, que faltava quando isto foi escrito, chegou logo depois. O que
+aconteceu quando ela chegou está no §50, e a lição vale mais que a feature: um
+modelo que recebe três colunas escreve sobre três colunas.)*

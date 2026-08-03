@@ -72,10 +72,20 @@ pub async fn status(State(state): State<AppState>) -> Json<scrub::ScrubStatus> {
 
 /// Geometria da folha de sprites. O player usa isto pra calcular a célula:
 /// `índice = floor(tempo / interval)`, `x = índice % columns`, `y = índice / columns`.
+/// A folha de sprites de um arquivo.
+///
+/// Gated na R26 (§42) pelo mesmo motivo do menu: a folha **é o filme inteiro em
+/// miniatura**. Servi-la a quem não pegou a caixa seria entregar o conteúdo em
+/// resolução baixa e chamar de metadado.
 pub async fn info(
     State(state): State<AppState>,
+    crate::auth::AuthUser(user): crate::auth::AuthUser,
     Path(media_file_id): Path<Uuid>,
 ) -> AppResult<Json<SpriteInfo>> {
+    if !crate::auth::acesso::pode_assistir(&state.pool, &user, media_file_id).await {
+        return Err(crate::auth::acesso::negado());
+    }
+
     sqlx::query_as::<_, SpriteInfo>(
         "SELECT media_file_id, path, interval_seconds, columns, rows,
                 thumb_width, thumb_height, frame_count

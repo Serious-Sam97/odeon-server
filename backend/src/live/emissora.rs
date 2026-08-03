@@ -68,7 +68,12 @@ pub fn canal(slug: &str) -> Option<&'static CanalOdeon> {
 /// tem horário de verão desde 2019, um deslocamento fixo resolve sem trazer a
 /// `chrono-tz` (e sem a tabela de fusos que ela carrega junto) — se um dia
 /// precisar de DST, é aqui que entra.
-fn deslocamento() -> Duration {
+///
+/// **Público porque a locadora também vira à meia-noite local** (§36): a
+/// prateleira roda na segunda-feira, e "segunda-feira" tem que querer dizer a
+/// mesma coisa que a grade quer dizer por "hoje". Duas leituras de fuso
+/// divergindo fariam a loja virar num horário e a emissora noutro.
+pub fn deslocamento() -> Duration {
     let h: i64 = std::env::var("ODEON_TZ_OFFSET")
         .ok()
         .and_then(|v| v.parse().ok())

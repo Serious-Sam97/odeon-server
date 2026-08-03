@@ -212,6 +212,22 @@ impl Tmdb {
             .await
     }
 
+    /// A ficha de produção de um filme.
+    pub async fn producao_do_filme(&self, id: &str) -> anyhow::Result<FichaDeProducao> {
+        self.get(&format!("/movie/{id}"), &[]).await
+    }
+
+    /// A saga a que um filme pertence, se pertencer a alguma (R32).
+    ///
+    /// **Mesmo endpoint da ficha de produção** — `belongs_to_collection` já vem
+    /// na mesma resposta que `production_countries`. São dois módulos porque são
+    /// dois jobs com retomadas diferentes; é uma chamada porque o TMDB manda
+    /// tudo junto e pedir duas vezes seria pagar dobrado pela mesma linha.
+    pub async fn saga_do_filme(&self, id: &str) -> anyhow::Result<Option<SagaDoProvider>> {
+        let ficha: FichaDeSaga = self.get(&format!("/movie/{id}"), &[]).await?;
+        Ok(ficha.belongs_to_collection)
+    }
+
     /// A série pelo ID, já como `Candidate`.
     ///
     /// A busca por texto devolve `Candidate`; o escopo por pasta já SABE o id
@@ -300,6 +316,70 @@ struct GenreList {
 struct Genre {
     id: i64,
     name: String,
+}
+
+/// A ficha de produção — país e idioma original.
+///
+/// Vem de `/movie/{id}`, e **não** da busca: `production_countries` não existe
+/// no resultado de `/search/movie`. Por isso ela é buscada na hora de APLICAR o
+/// candidato, uma vez por filme, e não uma vez por candidato avaliado — a mesma
+/// forma do `ensure_serie` do §21, que faz um `GET /tv/{id}` por série em vez de
+/// um por episódio.
+/// Medido em 40 filmes sorteados do acervo, antes de decidir o que entra:
+///
+/// | | |
+/// |---|---|
+/// | país de produção | **100%** |
+/// | idioma original | **100%** |
+/// | empresa produtora | 100% |
+/// | orçamento e bilheteria | 92% |
+///
+/// **Nem tudo que veio entra**, e as duas exclusões têm motivo medido:
+///
+/// * **Empresa produtora fica de fora.** 40 filmes trouxeram **34 empresas
+///   distintas** — quase uma por filme. Um eixo em que cada item tem uma obra
+///   não é eixo, é lista; é a mesma reprovação que o corte de "2+ obras" do
+///   §8h aplica às pessoas, e a mesma razão pela qual a R18 (§30) recusou o
+///   eixo de produção.
+/// * **Orçamento e bilheteria ficam de fora**, apesar dos 92%. O §33 já os
+///   traz do Wikidata **com a moeda**, e lá isso foi decisão explícita: valor
+///   em moeda que não sabemos nomear não vira curiosidade. Os campos `budget`
+///   e `revenue` do TMDB são número puro, **sem moeda nenhuma** — escrever
+///   "US$" sobre um orçamento em euros é exatamente a mentira com cara de
+///   metadado que o §18 proíbe. Duas fontes para o mesmo fato, e uma delas
+///   pior, é pior que uma fonte só.
+#[derive(Debug, Default, Deserialize)]
+pub struct FichaDeProducao {
+    #[serde(default)]
+    pub production_countries: Vec<PaisDoProvider>,
+    /// ISO 639-1. O TMDB usa `xx` para "sem diálogo".
+    pub original_language: Option<String>,
+}
+
+/// O envelope de `/movie/{id}` visto pelo lado da saga.
+#[derive(Debug, Default, Deserialize)]
+pub struct FichaDeSaga {
+    /// `null` na maioria dos filmes — a maioria não pertence a saga nenhuma, e
+    /// isso é fato, não falha.
+    pub belongs_to_collection: Option<SagaDoProvider>,
+}
+
+/// Uma saga, como o TMDB a declara.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SagaDoProvider {
+    pub id: i64,
+    /// Em pt-BR quando o TMDB tem — *"Coleção 007"*, *"Coleção De Volta para o
+    /// Futuro"*.
+    pub name: String,
+    pub poster_path: Option<String>,
+    pub backdrop_path: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PaisDoProvider {
+    pub iso_3166_1: String,
+    /// Em INGLÊS, mesmo pedindo `pt-BR` — ver `metadata/regiao.rs`.
+    pub name: String,
 }
 
 #[derive(Debug, Deserialize)]

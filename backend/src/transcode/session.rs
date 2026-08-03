@@ -55,6 +55,14 @@ struct Session {
     info: SessionInfo,
     dir: PathBuf,
     child: Child,
+    /// Quem pediu a sessão.
+    ///
+    /// **Entrou na R26** (§42). Antes, `GET /api/hls/{session_id}/{arquivo}`
+    /// servia os segmentos com o id da sessão como autorização inteira — um
+    /// UUID é impalpável, mas "id não adivinhável" é capacidade, não permissão,
+    /// e é exatamente a ressalva que o §9b já tinha feito sobre o `?token=`.
+    /// Com um convidado no círculo, a diferença deixa de ser acadêmica.
+    dono: Uuid,
 }
 
 pub struct SessionManager {
@@ -106,6 +114,7 @@ impl SessionManager {
         source: &Path,
         plan: PlaybackPlan,
         start_seconds: f64,
+        dono: Uuid,
     ) -> anyhow::Result<SessionInfo> {
         let id = Uuid::new_v4();
         let dir = self.root.join(id.to_string());
@@ -143,6 +152,7 @@ impl SessionManager {
                 info: info.clone(),
                 dir,
                 child,
+                dono,
             },
         );
 
@@ -207,9 +217,19 @@ impl SessionManager {
         self.sessions
             .lock()
             .await
-            .insert(id, Session { info: info.clone(), dir, child });
+            .insert(id, Session { info: info.clone(), dir, child, dono: Uuid::nil() });
 
         Ok(info)
+    }
+
+    /// De quem é esta sessão. `None` quando ela não existe (ou já foi ceifada).
+    ///
+    /// `Uuid::nil()` é o dono das sessões de canal ao vivo: elas nascem da
+    /// emissora (§25) e não de um pedido de pessoa, então não pertencem a
+    /// ninguém em particular — e são da casa, que é o que o `hls_file` trata
+    /// como aberto a morador.
+    pub async fn dono(&self, id: Uuid) -> Option<Uuid> {
+        self.sessions.lock().await.get(&id).map(|s| s.dono)
     }
 
     /// Argumentos do modo ao vivo.

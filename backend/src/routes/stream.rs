@@ -12,14 +12,26 @@ use tower::ServiceExt;
 use tower_http::services::ServeFile;
 use uuid::Uuid;
 
+use crate::auth::{acesso, AuthUser};
 use crate::error::{AppError, AppResult};
 use crate::AppState;
 
 pub async fn stream(
     State(state): State<AppState>,
+    AuthUser(user): AuthUser,
     Path(media_file_id): Path<Uuid>,
     request: Request,
 ) -> AppResult<Response> {
+    // R26: quem não é morador só recebe bytes do que pegou emprestado.
+    //
+    // A checagem vem ANTES de tocar no banco por causa do caminho: um 403 que
+    // acontece depois de a rota já ter lido o `path` funciona igual, mas passa
+    // a mensagem errada pra quem lê o código — a autorização é a primeira
+    // pergunta, não um detalhe do fim.
+    if !acesso::pode_assistir(&state.pool, &user, media_file_id).await {
+        return Err(acesso::negado());
+    }
+
     let row: Option<(String, String)> = sqlx::query_as(
         "SELECT path, status FROM media_file WHERE id = $1",
     )

@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use crate::auth::{acesso, AdminUser, AuthUser};
 use crate::error::{AppError, AppResult};
 use crate::transcode::{decide, session::SessionInfo, subtitles, MediaInfo, PlaybackPlan};
 use crate::AppState;
@@ -84,9 +85,15 @@ pub struct PlanResponse {
 /// Só decide — não gasta CPU nem cria sessão. O cliente consulta antes de tocar.
 pub async fn plan(
     State(state): State<AppState>,
+    AuthUser(user): AuthUser,
     Path(media_file_id): Path<Uuid>,
     Query(caps): Query<CapsQuery>,
 ) -> AppResult<Json<PlanResponse>> {
+    // R26: bytes de mídia passam pelo `acesso`. Ver `auth/acesso.rs`.
+    if !acesso::pode_assistir(&state.pool, &user, media_file_id).await {
+        return Err(acesso::negado());
+    }
+
     let file = load_file(&state, media_file_id).await?;
 
     let media = MediaInfo {
@@ -117,9 +124,15 @@ pub struct SessionResponse {
 /// Inicia (ou reinicia, com outro offset) uma sessão de transcode.
 pub async fn start_session(
     State(state): State<AppState>,
+    AuthUser(user): AuthUser,
     Path(media_file_id): Path<Uuid>,
     Query(caps): Query<CapsQuery>,
 ) -> AppResult<Json<SessionResponse>> {
+    // R26: bytes de mídia passam pelo `acesso`. Ver `auth/acesso.rs`.
+    if !acesso::pode_assistir(&state.pool, &user, media_file_id).await {
+        return Err(acesso::negado());
+    }
+
     let file = load_file(&state, media_file_id).await?;
     if file.status == "missing" {
         return Err(AppError::BadRequest(
@@ -143,6 +156,7 @@ pub async fn start_session(
             std::path::Path::new(&file.path),
             plan,
             caps.start.unwrap_or(0.0).max(0.0),
+            user.id,
         )
         .await?;
 
@@ -153,10 +167,30 @@ pub async fn start_session(
 }
 
 /// Playlist e segmentos. Cada pedido renova o relógio de ociosidade da sessão.
+/// Playlist e segmentos.
+///
+/// **A sessão pertence a quem a abriu** (R26, §42). Antes, o `session_id` era a
+/// autorização inteira: quem o tivesse recebia os bytes. Um UUID não é
+/// adivinhável, mas id impalpável é *capacidade*, não permissão — a mesma
+/// ressalva que o §9b já fazia sobre o `?token=`, e que deixa de ser acadêmica
+/// no dia em que há um convidado no círculo.
+///
+/// Morador continua alcançando as sessões da casa (`Uuid::nil()`), que são as
+/// dos canais ao vivo (§25) e não pertencem a ninguém em particular.
 pub async fn hls_file(
     State(state): State<AppState>,
+    AuthUser(user): AuthUser,
     Path((session_id, filename)): Path<(Uuid, String)>,
 ) -> AppResult<Response> {
+    match state.transcode.dono(session_id).await {
+        Some(dono) if dono == user.id => {}
+        Some(dono) if dono.is_nil() && acesso::e_morador(&user) => {}
+        // Sessão de outra pessoa é 404 e não 403: quem pede não deveria saber
+        // que ela existe.
+        Some(_) => return Err(AppError::NotFound),
+        None => return Err(AppError::NotFound),
+    }
+
     let is_playlist = filename.ends_with(".m3u8");
 
     let path = if is_playlist {
@@ -198,15 +232,32 @@ pub async fn hls_file(
     Ok(response)
 }
 
+/// Encerra a sessão. Só o dono — senão qualquer conta derruba a reprodução
+/// de qualquer outra.
 pub async fn stop_session(
     State(state): State<AppState>,
+    AuthUser(user): AuthUser,
     Path(session_id): Path<Uuid>,
 ) -> AppResult<Json<Value>> {
+    // Encerrar a sessão de outra pessoa derrubaria a reprodução dela. Silêncio
+    // e `ok: true` seria pior que 404 — quem chama precisa saber que não fez o
+    // que pediu.
+    match state.transcode.dono(session_id).await {
+        Some(dono) if dono == user.id => {}
+        Some(dono) if dono.is_nil() && acesso::e_morador(&user) => {}
+        _ => return Err(AppError::NotFound),
+    }
     state.transcode.stop(session_id).await;
     Ok(Json(json!({ "ok": true })))
 }
 
-pub async fn sessions(State(state): State<AppState>) -> Json<Vec<SessionInfo>> {
+/// Quem está transcodificando o quê, agora.
+///
+/// **Virou rota de administrador na R26.** A auditoria da §42 mostrou que ela
+/// respondia 200 pra qualquer conta — e uma lista de sessões ativas é uma lista
+/// de quem está assistindo o quê neste instante. Entre moradores isso é
+/// convivência; com um convidado no círculo é vigilância.
+pub async fn sessions(State(state): State<AppState>, AdminUser(_): AdminUser) -> Json<Vec<SessionInfo>> {
     Json(state.transcode.list().await)
 }
 
@@ -242,16 +293,26 @@ async fn todas_as_legendas(file: &FileRow) -> Vec<subtitles::SubtitleTrack> {
 
 pub async fn list_subtitles(
     State(state): State<AppState>,
+    AuthUser(user): AuthUser,
     Path(media_file_id): Path<Uuid>,
 ) -> AppResult<Json<Vec<subtitles::SubtitleTrack>>> {
+    // R26: bytes de mídia passam pelo `acesso`. Ver `auth/acesso.rs`.
+    if !acesso::pode_assistir(&state.pool, &user, media_file_id).await {
+        return Err(acesso::negado());
+    }
     let file = load_file(&state, media_file_id).await?;
     Ok(Json(todas_as_legendas(&file).await))
 }
 
 pub async fn subtitle_vtt(
     State(state): State<AppState>,
+    AuthUser(user): AuthUser,
     Path((media_file_id, index)): Path<(Uuid, i32)>,
 ) -> AppResult<Response> {
+    // R26: bytes de mídia passam pelo `acesso`. Ver `auth/acesso.rs`.
+    if !acesso::pode_assistir(&state.pool, &user, media_file_id).await {
+        return Err(acesso::negado());
+    }
     let file = load_file(&state, media_file_id).await?;
 
     // Faixa em arquivo: acha o caminho e converte direto, sem passar pelo vídeo.
