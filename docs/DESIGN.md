@@ -7260,3 +7260,696 @@ arquivo que exija transcode.
 **Não há reencontro depois de fechar a aba.** Quem fecha continua membro, e ao
 voltar cai na sala de novo — mas o filme dele reabre do ponto da sala, não de
 onde ele parou. É o certo pra sincronia e é uma escolha, não um esquecimento.
+
+---
+
+## 63. R47 — o rosto no cabeçalho, e o dado que já estava na resposta
+
+> *"Colocar foto de perfil no menu header junto ao nivel"*
+
+O `IDEIAS-3.md` §7 disse o tamanho da tarefa antes de ela começar: *"a R43 já
+guarda o rosto escolhido e a barra já desenha o anel de nível (§52) — é juntar
+os dois"*. A medição confirmou, e apertou ainda mais.
+
+### O que a medição achou, e por que ela mudou o desenho
+
+O cabeçalho **já pedia o perfil** desde o §52, pelo anel de nível — uma
+requisição, na montagem. E a resposta dessa mesma requisição **já carregava**
+`avatar` e `moldura`, resolvidos pelo servidor desde a R43. O rosto estava
+chegando na barra havia uma fase inteira; ninguém desenhava.
+
+Isso decidiu três coisas de uma vez:
+
+- **Nenhuma rota nova, nenhuma migração, nenhuma linha de Rust.** O `0038` que a
+  transição reservava continua reservado.
+- **Nenhuma requisição nova.** Rosto, nível e cor saem da mesma resposta, e por
+  isso moram no mesmo estado (`insignia`). Pedir três vezes o que vem numa vez
+  só é dar três chances de a barra mostrar um estado que não existe.
+- O `Avatar` da R42 **já fazia a queda certa**: com `arte`, o rosto; sem ela, a
+  marca derivada do nome. O cabeçalho não precisou de um caso especial pra quem
+  não escolheu — e no acervo real isso não é hipótese: `gabriel` é uma conta de
+  verdade sem rosto escolhido.
+
+### O número desceu pro canto, e não sumiu
+
+O miolo do anel era do número (`<b>`), e agora é do rosto. Duas saídas foram
+postas em decisão, e a escolha foi **o selo**: o número desce pro canto
+inferior-direito, como o contador de uma notificação.
+
+O motivo de não simplesmente apagá-lo é que **o anel e o número respondem
+perguntas diferentes**, e sempre responderam: o arco diz *quanto falta*, o número
+diz *onde você está*. Esconder o segundo atrás de um `title` mataria metade da
+informação que a fase 5 tem na barra — e a barra é a única tela onde ela aparece
+sem alguém pedir.
+
+O selo leva `border: 2px solid var(--bg)`. Ele encosta no rosto, e rosto é
+fotografia: sem esse anel de fundo ele encostaria numa pele clara e sumiria.
+
+### 28px, e o número foi medido
+
+O anel tinha 26px, com o furo (`::before`) em `inset: 2.5px` — 21px de miolo.
+Passou pra **28px**, o que dá **23px de rosto**: é o menor círculo em que um
+rosto de ator ainda se reconhece. Abaixo disso ele vira uma mancha de cor — que é
+exatamente a marca derivada da R42, com mais bytes e uma requisição a mais.
+
+Os 2px extras custam 2px na barra, que ficou em **80px no topo** e **62px
+condensada**. O selo cabe dentro das duas, conferido por medição do DOM e não por
+olhômetro.
+
+### A moldura passou a valer fora do perfil
+
+**Decidido:** a cor da moldura (R43) tinge o arco e o selo. Ela já tingia o
+perfil inteiro; o cabeçalho a leva pra toda tela, e é o que faz escolher uma cor
+significar alguma coisa — um enfeite que só aparece na tela onde se escolhe o
+enfeite é um enfeite que ninguém vê.
+
+Quem não escolheu cai no âmbar da casa, por `var(--anel-cor, var(--accent))`.
+
+### O defeito que a fase criou, e consertou antes de existir
+
+O cabeçalho lê o perfil **uma vez, na montagem**. Trocar de rosto acontece em
+`/perfil` — outra tela, outro componente, e nenhum aviso entre os dois. A barra
+ficaria com a cara velha até um F5: o §8b dito de outro jeito, com a tela
+mostrando o contrário do que acabou de acontecer.
+
+O aviso é um `window` event (`PERFIL_MUDOU`), e não o barramento: o barramento
+carrega o que aconteceu **no servidor**, e isto é o contrário — quem salvou foi
+você, aqui. Não é contexto do React porque quem emite (`Perfil`) é filho de quem
+ouve (`BarraDeCima`), e um estado subindo essa distância atravessaria seis telas
+que não têm nada a ver com isso.
+
+### Verificação
+
+Firefox headless por Marionette, **um de cada vez**, com duas contas de verdade e
+uma descartável.
+
+| | o que se viu |
+|---|---|
+| `sam` — tem rosto e moldura | rosto carregado (`naturalWidth > 0`), 23×23, arco em `198deg`, `--anel-cor: #e0b062`, selo **2** |
+| `gabriel` — não tem nem um nem outro | marca derivada (`svg.avatar`), arco em `43.2deg`, cor caindo no `--accent`, selo **1** |
+| condensada, nas duas | anel 28×28 e selo 15×15 **dentro** da barra de 62px — nada cortado |
+
+**A moldura foi provada à parte, e o motivo é uma armadilha:** `sam` escolheu
+`ambar`, que é `#e0b062` — **o próprio âmbar da casa**. A foto dele não prova
+tintura nenhuma, porque tingido e não tingido dão a mesma imagem. Forçando as
+outras três cores do catálogo, o arco **e** o selo seguem juntos:
+
+| | arco | selo |
+|---|---|---|
+| `cortina` `#a8324a` | `rgb(168, 50, 74)` | `rgb(168, 50, 74)` |
+| `projetor` `#4ea36b` | `rgb(78, 163, 107)` | `rgb(78, 163, 107)` |
+| `madrugada` `#5b7f95` | `rgb(91, 127, 149)` | `rgb(91, 127, 149)` |
+
+**E o aviso ao vivo, com conta descartável (`r47teste`):** abrir `/perfil`,
+escolher Robin Williams na galeria, salvar — e o cabeçalho trocou de cara **sem
+recarregar**, com `location.pathname` ainda em `/perfil`. Antes: marca derivada
+com a inicial. Depois: o rosto. A conta foi apagada no fim, e o `DELETE` levou
+junto perfil e sessão pelo cascade.
+
+**241 testes**, os mesmos: a fase não tocou no servidor. Typecheck limpo.
+
+### O que NÃO está fechado
+
+**O rosto não aparece na gaveta.** Abrir o menu de "você" mostra *perfil* e
+*sair*, sem cabeçalho próprio. Não foi pedido, e a barra já responde a pergunta.
+
+**A insígnia envelhece.** Ela é lida na montagem e quando você salva o perfil —
+ganhar nível assistindo não move o arco até a próxima navegação completa. Era
+assim desde o §52, e continua sendo: o barramento poderia avisar, mas o número
+muda devagar demais pra justificar um evento.
+
+---
+
+## 64. R48 — arrastar as fileiras, e duas correções na conta
+
+> *"Todo bloco que tiver uma lista na horizontal deve ter um grab and move com
+> mouse para facilitar usabilidade"*
+
+### A medição corrigiu o próprio documento
+
+O `IDEIAS-3.md` §0 mediu **sete** listas com `overflow-x: auto`. Duas delas não
+existem:
+
+**`.credit-group` e `.credit-people` são CSS morto.** Nenhum elemento do
+aplicativo carrega essas classes — o elenco virou `.cartaz-fila` em algum
+momento, e o CSS antigo ficou. E `.credit-group` nem `overflow-x` tem; ela
+sempre foi só uma margem.
+
+**Em compensação `.abas` estava faltando.** A barra de cima rola na horizontal
+em janela estreita, pelo `@media` de 900px — é uma lista horizontal como as
+outras, e a anotação diz *"todo bloco"*.
+
+A conta certa é **seis**: `.fileira` (a estante da locadora), `.fileira-canais`
+(ao vivo), `.guia-fileira` (a wiki), `.pv-fila` (a calibragem do "para você"),
+`.cartaz-fila` (o elenco da ficha) e `.abas`.
+
+E não são seis elementos: **a locadora e a wiki nascem dentro de um `map`** —
+uma fileira por estante, uma por eixo. A varredura em navegador achou três
+`.fileira` numa tela só.
+
+### Por isso o gancho devolve um `ref` de função
+
+`useArrastoDeFileira()` devolve um callback, não um `useRef`. Um `useRef` por
+instância não existe quando as instâncias saem de um `map`; um callback, sim —
+o React o chama uma vez por elemento, e o React 19 chama de volta a limpeza que
+ele devolve. Um gancho, seis chamadas, N elementos.
+
+### O limiar é o mesmo de antes, e isso é o ponto
+
+**6px** — o mesmo número do `arrastou()` da caixa na mão (§35), que separa
+*"girei pra ver o outro lado"* de *"toquei na lombada"*. Duas contas diferentes
+pro mesmo julgamento fariam o mesmo gesto decidir coisas diferentes em duas
+telas do mesmo produto.
+
+Acima de 6px é rolagem; abaixo, é clique. E o `IDEIAS-3.md` §5 nomeou o defeito
+a evitar: *"arrastar para rolar não pode virar 'peguei a caixa'"*. O clique que
+fecha um arrasto morre na **fase de captura**, antes de o cartão ouvir.
+
+Há uma sutileza que ajuda: com o ponteiro capturado, o navegador **entrega o
+`click` a quem capturou** — a fileira. É a mesma armadilha que a R43 documentou
+na caixa em `soltar()`, só que aqui ela joga a favor, porque quem capturou não
+tem `onClick` nenhum.
+
+### Quatro coisas que ele recusa fazer, e o porquê de cada uma
+
+| | |
+|---|---|
+| **toque** | o dedo já rola de nascença, com inércia que o sistema dá de graça — sequestrar isso é trocar um gesto bom por uma imitação. O pedido foi *"com mouse"* |
+| **inércia** | a fileira anda o que a mão andou, 1 pra 1. Rolagem que continua depois que a mão parou é boa no celular, onde o gesto acaba em movimento; no mouse é a lista escapando |
+| **gesto vertical** | mais vertical que horizontal não é desta fileira. Elas moram em páginas que rolam pra baixo, e roubar esse movimento é pior que não ter gesto |
+| **mãozinha sem rolagem** | `.arrastavel` só entra quando `scrollWidth > clientWidth`. Um `grab` numa lista que cabe inteira é o §8b visto do outro lado: o produto prometendo um gesto que ele sabe que não faz nada |
+
+O último precisa de dois observadores, e não de um: o `ResizeObserver` vê a
+fileira mudar de tamanho, e o `MutationObserver` vê o conteúdo **chegar** — a
+estante da locadora é abastecida caixa por caixa (§57), e nessa hora a caixa da
+fileira não muda mas o `scrollWidth` muda.
+
+### O defeito que esta fase criou, e como ele apareceu
+
+As abas já tinham um `ref` — o que mede o traço deslizante. Dois `ref` no mesmo
+elemento viraram um callback escrito na marca, no JSX:
+
+```tsx
+ref={(el) => { fileira.current = el; return arrastar(el); }}
+```
+
+**Uma função nova a cada render.** O React desliga o `ref` anterior e liga o
+novo toda vez, e a limpeza tira os ouvintes — no meio de um gesto, isso apaga o
+`pointerdown` que estava em curso. A fileira para de responder **sem erro
+nenhum**, que é o §8b.
+
+Ele foi encontrado por medição, não por leitura: as abas eram a única fileira
+que não rolava no teste. O conserto é um `useCallback`.
+
+### Verificação
+
+Firefox headless por Marionette, com ponteiro de verdade
+(`WebDriver:PerformActions` — `dispatchEvent` não serve pra UI que usa
+`setPointerCapture`, e o gancho usa).
+
+**A varredura primeiro**, achando as fileiras pelo DOM e não pela lista do
+documento: toda fileira com `overflow-x` rolável tinha `.arrastavel` e
+`cursor: grab`. **Nenhuma ficou de fora.**
+
+| fileira | onde | `scrollLeft` |
+|---|---|---|
+| `.fileira` | locadora, sobra de 904px | 0 → 240 |
+| `.fileira-canais` | ao vivo, sobra de 3.762px | 0 → 240 |
+| `.guia-fileira` | wiki, 3 fileiras, sobra de 834px | 0 → 240 |
+| `.cartaz-fila` | elenco do Drive, 15 atores (1.392 contra 838px) | 0 → 131 |
+| `.pv-fila` | calibragem, conta nova, sobra de 156px | 0 → 112 |
+| `.abas` | janela de 620px, sobra de 227px | 0 → 150, **sem trocar de aba** |
+
+E o julgamento entre arrasto e clique, na estante — que é onde ele importa:
+
+| | |
+|---|---|
+| clique parado, página nova | **abre a caixa** (`.mao-fundo` na tela) |
+| arrasto de 240px | rola, **não abre nada**, e o clique chega em `DIV.fileira` com `defaultPrevented=true` |
+| clique logo depois do arrasto | **abre de novo** — a tocaia não fica armada |
+| 40px na horizontal contra 200px na vertical | `scrollLeft` intacto |
+
+**241 testes**, os mesmos: a fase não tocou no servidor. Typecheck limpo.
+
+### Duas coisas que o teste ensinou, e que não são do produto
+
+**A primeira `.fileira` do DOM não transborda.** O primeiro teste leu isso como
+defeito — o gancho recusava, corretamente, uma fileira que cabia inteira na
+tela. Escolher a fileira **pela sobra** foi o conserto.
+
+**Um ponto aparado pra dentro da viewport pode sair de dentro do alvo.** Numa
+barra que quebra em três linhas, aparar o `y` pra 60px tirava a mira de cima das
+abas — e o teste culpava o produto por um gesto que nunca chegou nele. Hoje a
+mira confere com `elementFromPoint` antes de agir.
+
+### O que NÃO está fechado
+
+**O CSS morto continua lá.** `.credit-group` e `.credit-people` não foram
+apagados: limpar CSS que ninguém pediu pra limpar é outra tarefa, e ela merece
+uma varredura inteira em vez de duas linhas de carona nesta.
+
+**Não há gesto de teclado equivalente.** Uma fileira longa se percorre com Tab,
+cartão a cartão, e o navegador rola sozinho pra manter o foco visível. Funciona,
+e é mais lento que arrastar — mas é o que já era antes desta fase.
+
+---
+
+## 65. R49 — a pasta que diz o que ela é, e a metade do disco sem caminho
+
+> *"Deixar a seleção de pastas melhor"*
+
+O `IDEIAS-3.md` §4 disse o que faltava: *"a tela não diz nada sobre a pasta antes
+de você escolhê-la"*. A medição confirmou, com número, e depois achou uma coisa
+pior que ninguém tinha visto.
+
+### O número que abre o caso
+
+**30 das 40 pastas de `/media/TV Show` diziam "0 vídeos · subpastas".**
+
+A rota contava só o que estava solto no primeiro nível de cada pasta — e numa
+série o episódio mora em `Série/Temporada 1/`. A tela ficava muda exatamente
+onde a pessoa mais precisa de alguma coisa, e o resto do tempo dizia "1 vídeo",
+que já se sabia.
+
+Descer um nível a mais resolve, e o custo foi medido antes de escrever a linha:
+a maior pasta do acervo é `/media2/TV Show`, com **13.634 arquivos** — 160ms
+quente, alguns segundos frio. Aceitável numa gaveta que já espera por rede, e o
+suficiente pra a tela precisar dizer **"lendo a pasta…"**, que ela não dizia.
+
+### O palpite, e a linha onde ele para de falar
+
+O §4 pediu *"um palpite do tipo tirado do próprio `scanner::guess`"*. Ele roda
+sobre até 24 nomes — o vigésimo quinto arquivo de uma série não acrescenta nada
+ao que os 24 primeiros disseram — e com **`serial = false`**, que é a leitura
+conservadora: o parser tem regras que só valem quando já se sabe que a biblioteca
+é de série, e aqui essa é justamente a pergunta.
+
+Quatro em cinco nomes numerando episódio → **série**. A folga de um em cinco
+existe porque toda série real tem um "extras" no meio, e sem ela quase toda pasta
+de série viraria "mistura" — um rótulo que aparece em todo lugar não informa
+nada.
+
+**E aí o acervo ensinou a parte difícil.** A primeira versão rotulou **9 pastas
+de série como "filme"**, com toda a confiança. A causa está no disco:
+
+```
+/media/TV Show/Bob Esponja/Temporada 1/Bob.Esponja.SO1E09.avi
+                                                    ↑
+                                          letra O, não zero
+```
+
+O parser está certo em não casar. Quem está errado é o nome. Mas dizer "parece
+filme" pra uma pasta com 116 episódios é o §18 na veia — mentir com cara de
+metadado —, e é pior do que não dizer nada.
+
+O que separa os dois casos não é o nome, é a **forma**, e a medição a mostra sem
+ambiguidade nenhuma:
+
+| | |
+|---|---|
+| as 143 pastas de `/media/Movies` | **1 vídeo cada**, todas |
+| a menor pasta de série do acervo | **6** |
+
+O corte ficou em **3**, no meio de um vazio — e há teste que quebra se alguém o
+encostar em qualquer um dos dois lados. Acima dele, sem numeração no nome, a
+resposta honesta é **não ter resposta**: a tela omite (§24).
+
+### E a forma é a subpasta TÍPICA, não a mais cheia
+
+Duas correções que a medição impôs, uma depois da outra:
+
+**O máximo mente com um caso fora da curva.** As pastas de `/media2/Movies` têm
+1 vídeo cada — menos `007 Coleção`, que tem 24. Pelo máximo, a segunda maior
+biblioteca de filmes da casa ficava sem palpite por causa de um box set. Pela
+**mediana**, ela volta a ser o que é — e o caso que a regra existe pra pegar não
+escapa, porque as temporadas do `Bob Esponja` têm ~39 vídeos **cada uma**.
+
+**E os arquivos soltos não são concentração.** `/media/Movies` tem 9 filmes
+soltos na raiz além das 143 pastas; contando esses 9 como forma, a maior
+biblioteca de filmes do acervo também ficava muda. Nove filmes soltos são nove
+filmes: a concentração mora nas subpastas.
+
+### A cobertura não é informação, é um botão que some
+
+`create_library` **já recusava** biblioteca aninhada, nas duas direções, desde
+que existe: *"um arquivo pertence a UMA biblioteca"*. A tela não sabia — ela
+oferecia "usar esta pasta" em cima de `/media/TV Show` e entregava um 400.
+
+Isso é o §53 literal, então a cobertura não virou só um selo: **o botão sai de
+cena e o motivo ocupa o lugar dele**, dizendo qual das duas direções é —
+*"já está dentro de X"* e *"contém X"* pedem consertos diferentes. Um botão
+apagado convidaria a tentar, e tentar aqui é levar um "não" que a tela já sabia.
+
+A pasta coberta **continua clicável**, e isso é deliberado: navegar por dentro de
+uma biblioteca é como se chega numa subpasta que ainda não é de ninguém.
+
+### O buraco que a conferência achou, e que era maior que o pedido
+
+**Metade do disco não tinha caminho até esta tela.**
+
+O navegador nasce na primeira raiz, e o "subir" para nela. Com `/media` e
+`/media2` montados, **nada na tela levava a `/media2`** — nem ele, nem
+`/media2/Music`, nem `/media2/Youtube`. A tela que decide o acervo não alcançava
+metade dele.
+
+E o mais revelador: `roots` já vinha na resposta da rota **desde o primeiro
+dia**, com as duas montagens dentro. Ninguém nunca desenhou o campo. Agora são
+chips no topo, e só aparecem com mais de uma raiz — um seletor de uma opção é
+ruído (§24).
+
+**Um defeito meu, achado na mesma foto:** as duas raízes acendiam ao mesmo
+tempo, porque `"/media2".startsWith("/media")` é verdadeiro. A comparação passou
+a ser por segmento.
+
+### Verificação
+
+Firefox headless, com o acervo real e as 6 bibliotecas que existem.
+
+| onde | o que a tela diz |
+|---|---|
+| `/media` | `676 vídeos` · *contém a biblioteca "Filmes (DAS0)"* · **sem botão** |
+| `/media/TV Show` | `2532 vídeos · mistura` · *já está dentro de "Séries (DAS0)"* · **sem botão** |
+| `/media2` | `2914 vídeos` · chip `/media2` aceso, `/media` apagado · **sem botão** |
+| `/media2/Music` | `2 vídeos · parece filme` · sem aviso · **com botão** |
+
+E as linhas, que eram o assunto da fase:
+
+| | antes | agora |
+|---|---|---|
+| `TV Show` | `subpastas` | `500 vídeos` · `parece série` · `Séries (DAS0)` |
+| `Movies` | `9 vídeos · subpastas` | `152 vídeos` · `parece filme` · `Filmes (DAS0)` |
+| `Bob Esponja` | `subpastas` | `116 vídeos` · `Séries (DAS0)` — **sem palpite**, e é o certo |
+| `Music` | (nada) | (nada) — §24: não há vídeo, não há linha |
+
+Os palpites em `/media/TV Show`, sobre 40 pastas de verdade: **28 série, 2
+mistura, 10 sem palpite** — e **nenhum "filme"**, que era o erro da primeira
+versão.
+
+**251 testes** (dez novos): as três faixas do palpite, o extras que não derruba
+a série, a pasta sem vídeo que não chuta, as duas direções da cobertura, o caso
+`Bob Esponja` com os mesmos nomes em duas formas diferentes, e um teste que
+guarda o corte de 3 contra as duas medições que o cercam.
+
+### O que NÃO está fechado
+
+**A `revisão › pastas` não ganhou nada disto.** O §4 decidiu que as duas telas
+continuam duas, e elas continuam — mas a `Scopes.tsx` decide obra por obra e
+também escolheria melhor sabendo o que a pasta é. Não foi pedido.
+
+**Um box set continua sem palpite.** `007 Coleção`, com 24 filmes numa pasta só,
+é indistinguível de uma temporada pelos sinais que existem aqui. Ele fica em
+silêncio, que é o modo certo de errar.
+
+**A profundidade é dois, e é uma escolha.** `Série/Temporada/Disco 1/ep.mkv`
+seria contado a menos. Nenhuma pasta deste acervo tem esse formato hoje.
+
+---
+
+## 66. R50 — pegar emprestado pra dar play, e a regra sem porta dos fundos
+
+> *"Para dar play nos filmes é necessário pegar emprestado (SOMENTE MODO
+> LOCADORA)"*
+
+### O "modo locadora" já existia, e não ganhou chave nova
+
+É a **escassez** da R29, e ela já significa *"uma cópia por caixa, e quem pegou
+tirou da prateleira"*. Exigir o empréstimo pra assistir é a **consequência**
+disso, não uma regra ao lado: uma cópia que some da estante mas continua tocando
+pra todo mundo nunca foi uma cópia só.
+
+Uma segunda chave no painel diria a mesma coisa duas vezes, e duas chaves pra
+uma ideia é como um estado impossível nasce. Com a escassez desligada a locadora
+é um tema; com ela ligada, é o mecanismo.
+
+**E ela já estava ligada** no acervo real — então isto valeu no primeiro instante
+pras três contas, e não num futuro hipotético.
+
+### Vale pro administrador, e é decisão
+
+O `IDEIAS-3.md` §6 propôs, e ficou decidido: **a regra vale pra todo mundo**.
+Uma regra com porta dos fundos pro dono não é uma regra — é um tema. O que
+distingue o `admin` continua sendo o que sempre distinguiu: ele **desliga a
+escassez** quando quiser, num clique, pra casa inteira.
+
+E o `guest` não mudou uma linha: pra ele o empréstimo sempre foi obrigatório.
+
+### A regra é uma linha, e ela entrou na consulta que já existia
+
+`acesso::pode_assistir` era `if e_morador(user) { return true }` seguido de um
+`EXISTS`. Virou:
+
+```sql
+($3 AND COALESCE((SELECT NOT escassez FROM locadora_opcoes), true))
+OR EXISTS ( …o empréstimo em aberto… )
+```
+
+**A escassez é lida na mesma consulta, e isso é medida e não estilo.** Esta
+função roda a cada requisição de faixa do `<video>` — dezenas por minuto num
+filme sendo assistido. Ler a opção em separado dobraria as idas ao banco de tudo
+que toca; aqui é uma linha a mais num `SELECT` que já existia, sobre uma tabela
+de **uma** linha com chave primária.
+
+O `COALESCE` erra pro lado aberto de propósito: sem linha de opções não há
+locadora configurada, e trancar o disco da casa por causa de uma tabela vazia
+seria transformar ausência de configuração em bloqueio.
+
+### O trabalho não foi a regra, foi a tela — e ela precisou de uma rota
+
+**Nove pontos de play**, e eles montam a obra de seis rotas diferentes. Pendurar
+um booleano em cada resposta seria a mesma regra escrita seis vezes — e o
+`WorkListItem` é `sqlx::FromRow`, então cada coluna nova ali custa quatro
+projeções SQL (§14).
+
+`GET /api/locadora/liberadas` responde uma vez: `exige` e a lista de obras que os
+meus empréstimos cobrem, com a **mesma** expansão de coleção do `pode_assistir` —
+se as duas divergirem, a tela oferece o que os bytes negam, que é o defeito que
+esta fase existe pra apagar.
+
+Com `exige: false` a lista vem **vazia**, de propósito: "tudo liberado" não se
+diz com 17.498 ids.
+
+### A loja do cliente, e por que ela fica fora do React
+
+`liberadas.ts` é uma loja de módulo com `useSyncExternalStore`. Passar isso por
+props atravessaria seis componentes que não têm nada a ver com locadora; um
+contexto exigiria um provider em volta de tudo pra um dado que muda duas vezes
+por dia.
+
+**Ela se atualiza sozinha pelo barramento.** A lista só muda quando alguém pega
+ou devolve uma fita — e isso é `AppEvent::Locadora`, que existe desde a R19. E a
+assinatura entra na **mesma conexão** do aplicativo: foi o defeito que a R46
+pagou caro (§62).
+
+E há um estado que não é "não": **`null` = ainda não perguntei**. Uma tela que
+nasce dizendo "pegar na locadora" pra tudo e conserta meio segundo depois mente
+duas vezes em vez de uma.
+
+### O funil, e por que ele existe mesmo com os nove botões certos
+
+`App.tocar()` repergunta antes de abrir o vídeo, e um "não" leva **pra
+locadora**. Os botões decidem com o que a loja local sabia no último quadro; o
+funil decide com o que o servidor sabe agora.
+
+A corrida é real: alguém devolve a sua fita pelo "pedir de volta", o evento ainda
+não chegou, e o clique abriria um player que não recebe bytes — a pior forma de
+dizer não, porque parece defeito.
+
+E `conferirLiberada` **repergunta antes de negar**, nunca antes de permitir: o
+caminho mais comum de todos é *pegar a fita e dar play em seguida*, e barrar quem
+acabou de pegar a caixa seria o produto negando o que ele mesmo acabou de
+entregar.
+
+### O botão não é desabilitado, é redirecionado
+
+Em oito dos nove pontos o play **vira a porta da locadora** — mesmo lugar, mesmo
+tamanho, destino novo. Um botão apagado diz "não" sem dizer onde, que é a parede
+que o §35 recusou quando desenhou o "pedir de volta".
+
+A exceção é a caixa na mão, e ela é exceção por um motivo: **o balcão do "pegar
+emprestado" está na mesma tela, a dois centímetros**. Ali o play desabilitado
+dizendo "▸ pegue emprestado" não é um beco — a saída está no campo de visão.
+
+**E o "assistir junto" some junto com o play.** Abrir uma sala pra um filme que
+você não pode tocar convidaria gente pra uma tela preta.
+
+### Verificação
+
+**No servidor**, com `sam` (admin) e a escassez ligada — ele está com uma fita,
+`Bom Dia, Vietnã`:
+
+| | |
+|---|---|
+| `/api/locadora/liberadas` | `{"exige": true, "works": [847e976d…]}` |
+| a obra emprestada | **206** |
+| qualquer outra | **403** · `"você precisa pegar esta caixa emprestada na locadora pra assistir"` |
+| desligando a escassez | qualquer outra → **206**, e `liberadas` → `{"exige": false, "works": []}` |
+| religando | **403** de novo |
+
+A reversibilidade é **sem reiniciar nada**: a opção é lida na consulta, e a chave
+volta a valer no clique seguinte.
+
+**Nas telas**, com o mesmo `sam`:
+
+| ponto | o que apareceu |
+|---|---|
+| "para você" — herói | `▸ PEGAR NA LOCADORA`, pôster com moldura âmbar |
+| "para você" — numerados | **6 de 6** marcados |
+| "para você" — fila | **8 de 8** marcados |
+| ficha de obra não emprestada | `▸ PEGAR NA LOCADORA`, **sem** "assistir junto" |
+| o clique | vai pra `/locadora` — **nenhum player aberto**, nenhum 403 |
+| ficha da obra que ele tem | `▸ ASSISTIR`, com "assistir junto" de volta |
+| caixa na mão, dele | `▸ ASSISTIR`, abertura acionável |
+| caixa na mão, de outro | `▸ PEGUE EMPRESTADO`, abertura **não** acionável, e o "pegar emprestado" do balcão ao lado |
+
+**252 testes** (um novo, e é o que guarda o convidado: se `e_morador` inverter, o
+convidado vira morador em silêncio e a escassez deixa de valer pra ele).
+
+### Um defeito meu, achado pela foto
+
+O pôster do herói **mudou de destino e não mudou de aparência**: troquei o
+`onClick` e esqueci a classe. A medição contou `{total: 1, pegar: 0}` enquanto os
+outros 14 cartões estavam certos — invisível numa leitura de código, óbvio numa
+contagem.
+
+### O que NÃO está fechado
+
+**O cartão de calibragem não foi exercido.** O `.pv-card` do "para você" só nasce
+pra quem ainda não votou, e `sam` já votou. O gancho é o mesmo dos outros quatro
+e a classe está ligada, mas a foto não pegou nenhum na tela.
+
+**Um empréstimo por caixa, e o limite é 3.** Com a escassez ligada, cada pessoa
+assiste no máximo três coisas por vez. É o desenho — uma locadora de verdade —,
+e vale saber que é isso que a chave liga.
+
+**O "continuar assistindo" continua listando o que não dá pra tocar.** A fileira
+mostra onde você parou mesmo em obra devolvida, e clicar leva à locadora. É
+coerente com o §35 (a fita lembra onde parou, e a memória é sua), mas é uma lista
+que promete menos do que parece.
+
+---
+
+## 67. R51 — a separação, e o que ela custou de verdade
+
+> *"Fazer a separação de repos do client para o server"*
+
+### O laço era um arquivo, e a medição confirmou antes de mexer
+
+O `IDEIAS-3.md` §3 já dizia, e foi conferido de novo:
+
+| | |
+|---|---|
+| imports cruzados `web` ↔ `backend` | **zero** |
+| tipo compartilhado, código gerado | **nenhum** |
+| menções ao outro lado no código | **duas**, e as duas em comentário |
+| `.env` no histórico | **nunca** — 6 commits, nenhum toca nele |
+
+`web/src/api.ts` descreve as respostas do servidor em TypeScript escrito à mão,
+e **já era uma cópia** antes da separação. Separar custou apagar um serviço de
+cada `docker-compose.yml`.
+
+### Três decisões, e as três são de quem decide
+
+**Licença: AGPL-3.0.** Não é a mais permissiva nem a mais usada — é a que
+corresponde ao que este software **é**. Um servidor de mídia é usado *através*
+da rede, não distribuído em disco: com a GPL comum a obrigação de publicar
+nunca dispararia, porque servir não é distribuir. A AGPL fecha exatamente essa
+brecha (§13 do texto dela, "Remote Network Interaction").
+
+O texto veio da `gnu.org`, verbatim, 661 linhas. Não de memória: uma licença
+reescrita de cabeça é uma licença que não vale.
+
+**O `DESIGN.md` foi inteiro pro servidor.** Ele argumenta sobre as duas metades
+nas mesmas seções — o §35 fala da estante 3D **e** do empréstimo, o §62 do
+player **e** do barramento, o §66 das nove telas **e** do `acesso.rs`. Rachá-lo
+por assunto exigiria cortar ou duplicar justamente essas, que são as melhores.
+O repositório do cliente aponta pra ele.
+
+**Publicar é do dono.** A preparação é local; os dois repositórios ficam prontos
+em `odeon-split/` e ninguém empurra nada. Criar repositório público é uma porta
+que não fecha direito: o GitHub indexa na hora, e apagar depois não desfaz
+clones nem cache de busca.
+
+### O histórico foi replantado à mão, e por quê
+
+Nem `git filter-branch` (não existe no git 2.55) nem `filter-repo` (sem `pip`
+nesta máquina). Com **seis** commits, replantar com plumbing é exato:
+
+```
+para cada commit, em ordem:
+  read-tree  →  git rm --cached o outro lado  →  write-tree  →  commit-tree
+```
+
+Autor, e-mail e data vêm do commit original; o que muda é só a árvore. Commit
+que não mexia neste lado não vira commit — ele contaria uma história que este
+repositório não tem.
+
+O resultado: **zero commits tocando o outro lado** nos dois, e o `.git` caindo
+de 2,4M para 724K e 500K.
+
+### O que cada repositório levou
+
+| | `odeon-server` | `odeon-client` |
+|---|---|---|
+| código | `backend/` | `web/` + `clients/` |
+| documentação | `docs/` inteiro | aponta pro outro |
+| compose | sobe `db` + `api` | sobe só `web` |
+| `.env.example` | 58 linhas | **35**, e nenhuma é chave |
+| licença | AGPL-3.0 | AGPL-3.0 |
+
+O `.env.example` do cliente é o retrato da separação: sobrou `VITE_API_URL`, a
+porta e os dois caminhos de TLS. Senha de banco, chave do TMDB, chave do Groq e
+caminho de disco ficaram todos do outro lado — porque a interface não fala com
+banco, não identifica filme e não enxerga mídia.
+
+### Os ponteiros mortos, que eram doze e não dois
+
+O §3 tinha medido **duas** menções a `backend/` no cliente. A varredura achou
+mais **doze** a `docs/DESIGN.md` — em cinco componentes e no `styles.css` —,
+todas apontando pra um arquivo que deixou de existir daquele lado.
+
+Um comentário que manda ler um arquivo inexistente é pior que comentário
+nenhum: ele promete uma explicação. Todos passaram a dizer **onde** o documento
+mora.
+
+### Verificação
+
+O que importa aqui não é screenshot, é **isolamento**: cada repositório tem que
+funcionar sem o outro existir.
+
+| | |
+|---|---|
+| `odeon-server`, sozinho | `cargo test` → **252 passando** |
+| `odeon-client`, sozinho | `tsc --noEmit` → **limpo** |
+| compose do servidor | válido; serviços `db`, `api` |
+| compose do cliente | válido; serviço `web` |
+| histórico do servidor | 6 commits, **0** tocando `web/` ou `clients/` |
+| histórico do cliente | 6 commits, **0** tocando `backend/` ou `docs/` |
+| referência morta ao outro lado | **nenhuma** nos dois |
+| o repositório original | **intacto** — `HEAD` ainda em `ba09936` |
+
+### O que NÃO está fechado
+
+**Nada foi publicado, e nada foi commitado.** Os dois repositórios estão prontos
+em `odeon-split/` — `odeon-server` e `odeon-client` —, com a árvore de trabalho no estado de hoje (R47–R50 inclusos)
+e sem commit — a regra do projeto é commitar só quando pedido, e ela vale também
+pra repositório novo.
+
+**O cliente chama-se `odeon-client`, e não `odeon-web`.** Eu tinha assumido o
+segundo nome e escrito ele em quatro lugares — os dois `README`, os dois
+`docker-compose.yml` — antes de os repositórios existirem. Assumir nome de
+repositório que ainda não foi criado é a mesma classe de erro que o §18 nomeia:
+escrever com confiança o que ainda não é fato.
+
+Os `remote` estão ligados, e os dois repositórios remotos estão **vazios** — não
+há nada a sobrescrever.
+
+**O acervo continua rodando do repositório antigo.** O `docker-compose.yml` em
+uso é o de `~/Developer/odeon`, e trocar pra estrutura nova é um passo separado
+— que envolve derrubar e subir os containers de uma casa com três pessoas
+dentro.
+
+**A duplicação de `api.ts` virou oficial.** Ela já existia, mas era uma cópia
+dentro do mesmo repositório, onde um `grep` alcançava as duas pontas. Agora são
+dois repositórios, e uma rota que mude de forma no servidor não tem mais nada
+que avise o cliente. É a dívida que a separação cria, e ela é o preço da
+decisão — não um descuido.

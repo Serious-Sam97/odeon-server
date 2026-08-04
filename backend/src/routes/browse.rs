@@ -25,13 +25,51 @@ const VIDEO_EXTS: &[&str] = &[
     "mkv", "mp4", "avi", "mov", "m4v", "webm", "ts", "m2ts", "mpg", "mpeg", "wmv", "flv", "ogv",
 ];
 
+/// O que uma pasta **parece** ser, lido dos nomes dos arquivos dentro dela.
+///
+/// É um palpite, e o nome diz isso de propósito (§18): quem decide o tipo da
+/// biblioteca continua sendo a pessoa. Ele só existe pra ela não escolher no
+/// escuro.
+#[derive(Debug, Serialize, PartialEq, Clone, Copy)]
+#[serde(rename_all = "lowercase")]
+pub enum Palpite {
+    Filme,
+    Serie,
+    Mistura,
+}
+
+/// A pasta já está numa biblioteca — e o servidor **recusa** as duas direções.
+///
+/// `create_library` devolve 400 tanto pra pasta dentro de uma biblioteca quanto
+/// pra pasta que contém uma: *"um arquivo pertence a UMA biblioteca"*. Oferecer
+/// o botão nesses casos é o §53 — o produto oferecendo o que ele sabe que vai
+/// negar —, então a tela precisa saber disso **antes** do clique.
+#[derive(Debug, Serialize, Clone)]
+pub struct Cobertura {
+    pub biblioteca: String,
+    /// `true`: esta pasta está DENTRO da biblioteca.
+    /// `false`: esta pasta CONTÉM a biblioteca.
+    pub dentro: bool,
+}
+
 #[derive(Debug, Serialize)]
 pub struct Entry {
     pub name: String,
     pub path: String,
     /// Quantos vídeos direto nesta pasta (não conta subpastas).
     pub video_count: usize,
+    /// E quantos nas subpastas dela — **o número que faltava**.
+    ///
+    /// Sem ele, 30 das 40 pastas de `/media/TV Show` diziam "0 vídeos ·
+    /// subpastas", porque episódio mora em pasta de temporada. A tela dizia
+    /// nada justamente onde a pessoa mais precisa de alguma coisa.
+    pub videos_abaixo: usize,
     pub has_subdirs: bool,
+    pub coberta_por: Option<Cobertura>,
+    pub palpite: Option<Palpite>,
+    /// A contagem bateu no teto e parou. A tela mostra "+" em vez de um número
+    /// que seria mentira.
+    pub truncado: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -42,6 +80,12 @@ pub struct Listing {
     pub roots: Vec<String>,
     pub entries: Vec<Entry>,
     pub video_count: usize,
+    /// O que há abaixo desta pasta, somando as subpastas listadas. Sai da
+    /// mesma varredura das entradas — nenhuma leitura a mais.
+    pub videos_abaixo: usize,
+    pub coberta_por: Option<Cobertura>,
+    pub palpite: Option<Palpite>,
+    pub truncado: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -80,6 +124,210 @@ fn is_video(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Teto de vídeos contados por pasta.
+///
+/// **Não é uma paginação, é um freio contra árvore patológica.** A maior pasta
+/// deste acervo é `A Grande Família`, com 949 arquivos — o teto está uma ordem
+/// de grandeza acima, e nunca dispara aqui. Se disparar, a tela diz "5000+" em
+/// vez de um número redondo que seria mentira (§18).
+const TETO: usize = 5_000;
+
+/// Quantos nomes bastam pra dizer o que uma pasta é.
+///
+/// Vinte e quatro, e não todos: o palpite é sobre o **formato** dos nomes, e o
+/// vigésimo quinto arquivo de uma série não acrescenta nada ao que os vinte e
+/// quatro primeiros já disseram. Rodar o parser em 949 nomes pra chegar na
+/// mesma resposta é trabalho jogado fora.
+const AMOSTRA: usize = 24;
+
+/// O que se descobre abrindo uma pasta e a primeira camada de subpastas.
+#[derive(Default)]
+struct Olhada {
+    diretos: usize,
+    abaixo: usize,
+    subpastas: bool,
+    amostra: Vec<PathBuf>,
+    truncado: bool,
+    /// Quantos vídeos há em cada subpasta que tem algum. **É a forma da
+    /// pasta**, e ela separa dois casos que o nome do arquivo sozinho não
+    /// separa — ver `palpitar` e `tipica`.
+    por_subpasta: Vec<usize>,
+}
+
+/// A subpasta típica, e **não a mais cheia**.
+///
+/// O máximo mente com um único caso fora da curva, e o acervo tem um: as 143
+/// pastas de `/media2/Movies` têm 1 vídeo cada, menos `007 Coleção`, que tem
+/// 24. Pelo máximo, a segunda maior biblioteca de filmes da casa ficava sem
+/// palpite por causa de um box set. Pela mediana, ela volta a ser o que é.
+///
+/// E o caso que a regra existe pra pegar não escapa: as pastas de temporada do
+/// `Bob Esponja` têm ~39 vídeos **cada uma**, então a mediana também é ~39.
+fn tipica(mut por_subpasta: Vec<usize>) -> usize {
+    if por_subpasta.is_empty() {
+        return 0;
+    }
+    por_subpasta.sort_unstable();
+    por_subpasta[por_subpasta.len() / 2]
+}
+
+/// Olha uma pasta **dois níveis pra baixo**, e não um.
+///
+/// Dois porque é exatamente o layout `Série/Temporada 1/ep.mkv`, que é o que
+/// esta rota não enxergava. E não três: o custo cresce com a árvore, e o
+/// terceiro nível não muda a resposta de nenhum layout que este acervo tem.
+async fn olhar(dir: &Path) -> Olhada {
+    let mut o = Olhada::default();
+
+    let Ok(mut nivel1) = tokio::fs::read_dir(dir).await else {
+        return o;
+    };
+
+    while let Ok(Some(item)) = nivel1.next_entry().await {
+        let path = item.path();
+        let nome = item.file_name().to_string_lossy().to_string();
+        if oculto(&nome) {
+            continue;
+        }
+        let Ok(tipo) = item.file_type().await else {
+            continue;
+        };
+
+        if tipo.is_file() {
+            if is_video(&path) {
+                o.diretos += 1;
+                if o.amostra.len() < AMOSTRA {
+                    o.amostra.push(path);
+                }
+            }
+            continue;
+        }
+        if !tipo.is_dir() {
+            continue;
+        }
+
+        o.subpastas = true;
+        let Ok(mut nivel2) = tokio::fs::read_dir(&path).await else {
+            continue;
+        };
+        let mut nesta = 0usize;
+        while let Ok(Some(neto)) = nivel2.next_entry().await {
+            let p = neto.path();
+            if !matches!(neto.file_type().await, Ok(t) if t.is_file()) || !is_video(&p) {
+                continue;
+            }
+            o.abaixo += 1;
+            nesta += 1;
+            if o.amostra.len() < AMOSTRA {
+                o.amostra.push(p);
+            }
+            if o.diretos + o.abaixo >= TETO {
+                o.truncado = true;
+                if nesta > 0 {
+                    o.por_subpasta.push(nesta);
+                }
+                return o;
+            }
+        }
+        if nesta > 0 {
+            o.por_subpasta.push(nesta);
+        }
+    }
+    o
+}
+
+/// Ocultos e as pastas de metadata de NAS só poluem a escolha.
+fn oculto(nome: &str) -> bool {
+    nome.starts_with('.') || nome == "@eaDir" || nome == "lost+found"
+}
+
+/// O palpite, e ele é uma função pura de propósito — assim ele é testável sem
+/// disco, que é onde as regras de nome merecem ser exercidas.
+///
+/// **`serial = false` no `guess_from_path`, e isso importa.** O parser tem
+/// regras que só valem quando já se sabe que a biblioteca é de série (índice na
+/// frente, episódio absoluto sem sinal de anime) — e o comentário do `guess.rs`
+/// avisa: *"num acervo de filmes elas causariam estrago"*. Aqui ninguém sabe
+/// ainda o que a pasta é: essa é justamente a pergunta. Então vale só o que o
+/// nome diz sozinho, sem ajuda.
+/// `concentracao`: quantos vídeos cabem na **mesma** pasta ali dentro, no pior
+/// caso. É a forma, e ela é o que separa um caso que o nome sozinho não separa —
+/// ver `quando_o_nome_nao_numera_a_forma_decide`.
+///
+/// **Não é o total, e a diferença custou uma medição errada.** `/media/Movies`
+/// tem 9 filmes soltos na raiz além das 143 pastas; contando esses 9 como
+/// concentração, a maior biblioteca de filmes do acervo ficava sem palpite.
+/// Nove filmes soltos são nove filmes — a concentração mora nas subpastas.
+fn palpitar(amostra: &[PathBuf], raiz: &Path, concentracao: usize) -> Option<Palpite> {
+    if amostra.is_empty() {
+        return None;
+    }
+    let episodios = amostra
+        .iter()
+        .filter(|p| {
+            crate::scanner::guess::guess_from_path(p, raiz, false)
+                .any_episode()
+                .is_some()
+        })
+        .count();
+
+    // Quatro em cinco, e não todos: uma série real tem um "extras" ou um
+    // "especial de natal" no meio que não numera, e chamar isso de "mistura"
+    // apagaria o sinal em quase toda pasta de série que existe.
+    if episodios * 5 >= amostra.len() * 4 {
+        return Some(Palpite::Serie);
+    }
+    if episodios * 5 > amostra.len() {
+        return Some(Palpite::Mistura);
+    }
+
+    // Nenhum nome numera episódio. Isso NÃO quer dizer "filme".
+    //
+    // Medido neste acervo: `Bob Esponja` tem 116 vídeos chamados
+    // `Bob.Esponja.SO1E09.avi` — com a **letra O** no lugar do zero. O parser
+    // está certo em não casar; quem está errado é o nome no disco. Chamar essa
+    // pasta de "filme" seria o §18 na veia: mentir com cara de metadado.
+    //
+    // O que separa os dois casos é a forma, e a medição a mostra sem ambiguidade
+    // nenhuma: **as 143 pastas de `/media/Movies` têm exatamente 1 vídeo cada**,
+    // e a menor pasta de série tem 6. O corte em 3 fica no meio de um vazio, e
+    // não em cima do dado.
+    //
+    // Acima disso a resposta honesta é não ter resposta — a tela omite (§24).
+    if concentracao <= FILME_NO_MAXIMO {
+        Some(Palpite::Filme)
+    } else {
+        None
+    }
+}
+
+/// Quantos vídeos ainda cabem numa pasta que é "um filme".
+///
+/// Um, na prática — este acervo tem 143 de 143 assim. Três dá espaço pra um
+/// filme com making-of e cena deletada sem abrir a porta pra uma temporada.
+const FILME_NO_MAXIMO: usize = 3;
+
+/// Esta pasta já está numa biblioteca — nos dois sentidos, porque o servidor
+/// recusa os dois.
+fn cobertura(path: &Path, bibliotecas: &[(String, String)]) -> Option<Cobertura> {
+    for (nome, raiz) in bibliotecas {
+        let outra = Path::new(raiz);
+        if path.starts_with(outra) {
+            return Some(Cobertura {
+                biblioteca: nome.clone(),
+                dentro: true,
+            });
+        }
+        if outra.starts_with(path) {
+            return Some(Cobertura {
+                biblioteca: nome.clone(),
+                dentro: false,
+            });
+        }
+    }
+    None
+}
+
 pub async fn browse(
     State(state): State<AppState>,
     AdminUser(_): AdminUser,
@@ -99,8 +347,22 @@ pub async fn browse(
 
     let current = resolve(&requested, roots)?;
 
+    // As bibliotecas que já existem, pra dizer o que já está tomado. Uma
+    // consulta pra a listagem inteira.
+    let bibliotecas: Vec<(String, String)> =
+        sqlx::query_as("SELECT name, root_path FROM library")
+            .fetch_all(&state.pool)
+            .await?;
+
     let mut entries: Vec<Entry> = Vec::new();
     let mut video_count = 0usize;
+    let mut videos_abaixo = 0usize;
+    let mut truncado = false;
+    // A forma desta pasta, vista pelas filhas. Numa pasta de filmes a filha
+    // típica tem um vídeo; numa de séries, uma temporada inteira.
+    let mut por_entrada: Vec<usize> = Vec::new();
+    // A amostra da pasta atual sai das amostras das filhas, sem leitura a mais.
+    let mut amostra: Vec<PathBuf> = Vec::new();
 
     let mut dir = tokio::fs::read_dir(&current)
         .await
@@ -110,8 +372,7 @@ pub async fn browse(
         let path = item.path();
         let name = item.file_name().to_string_lossy().to_string();
 
-        // Ocultos e as pastas de metadata de NAS só poluem a escolha.
-        if name.starts_with('.') || name == "@eaDir" || name == "lost+found" {
+        if oculto(&name) {
             continue;
         }
 
@@ -122,6 +383,9 @@ pub async fn browse(
         if kind.is_file() {
             if is_video(&path) {
                 video_count += 1;
+                if amostra.len() < AMOSTRA {
+                    amostra.push(path);
+                }
             }
             continue;
         }
@@ -130,24 +394,37 @@ pub async fn browse(
             continue;
         }
 
-        // Espia dentro pra mostrar quantos vídeos há — sem descer recursivo,
-        // que numa biblioteca grande travaria a listagem.
-        let (mut inner_videos, mut has_subdirs) = (0usize, false);
-        if let Ok(mut inner) = tokio::fs::read_dir(&path).await {
-            while let Ok(Some(child)) = inner.next_entry().await {
-                match child.file_type().await {
-                    Ok(t) if t.is_dir() => has_subdirs = true,
-                    Ok(t) if t.is_file() && is_video(&child.path()) => inner_videos += 1,
-                    _ => {}
-                }
-            }
+        // Espia dentro — dois níveis, que é o que faz `Série/Temporada/ep.mkv`
+        // deixar de dizer "0 vídeos".
+        let o = olhar(&path).await;
+
+        videos_abaixo += o.diretos + o.abaixo;
+        truncado |= o.truncado;
+        por_entrada.push(o.diretos + o.abaixo);
+        for p in o.amostra.iter().take(AMOSTRA.saturating_sub(amostra.len())) {
+            amostra.push(p.clone());
         }
 
         entries.push(Entry {
             name,
+            // Com subpasta que tenha vídeo, a forma é a subpasta típica; sem
+            // nenhuma, são os arquivos que ela guarda — uma pasta de 23 vídeos
+            // sem subpasta é uma temporada, e uma de 1 é um filme.
+            palpite: palpitar(
+                &o.amostra,
+                &path,
+                if o.por_subpasta.is_empty() {
+                    o.diretos
+                } else {
+                    tipica(o.por_subpasta.clone())
+                },
+            ),
+            coberta_por: cobertura(&path, &bibliotecas),
+            video_count: o.diretos,
+            videos_abaixo: o.abaixo,
+            has_subdirs: o.subpastas,
+            truncado: o.truncado,
             path: path.to_string_lossy().to_string(),
-            video_count: inner_videos,
-            has_subdirs,
         });
     }
 
@@ -167,11 +444,25 @@ pub async fn browse(
     };
 
     Ok(Json(Listing {
+        // A mesma conta um nível acima: a forma desta pasta é a entrada típica
+        // dela, e só na ausência de entradas são os arquivos soltos.
+        palpite: palpitar(
+            &amostra,
+            &current,
+            if por_entrada.iter().all(|n| *n == 0) {
+                video_count
+            } else {
+                tipica(por_entrada.iter().copied().filter(|n| *n > 0).collect())
+            },
+        ),
+        coberta_por: cobertura(&current, &bibliotecas),
         path: current.to_string_lossy().to_string(),
         parent,
         roots: roots.iter().map(|r| r.to_string_lossy().to_string()).collect(),
         entries,
         video_count,
+        videos_abaixo,
+        truncado,
     }))
 }
 
@@ -214,5 +505,149 @@ mod tests {
         assert!(is_video(Path::new("/x/a.mp4")));
         assert!(!is_video(Path::new("/x/legenda.srt")));
         assert!(!is_video(Path::new("/x/sem-extensao")));
+    }
+
+    fn amostra(raiz: &str, nomes: &[&str]) -> Vec<PathBuf> {
+        nomes.iter().map(|n| PathBuf::from(raiz).join(n)).collect()
+    }
+
+    /// Uma pasta de série é reconhecida pelo formato dos nomes, e é isso que a
+    /// tela precisa dizer antes de alguém escolher no escuro.
+    #[test]
+    fn palpite_de_serie() {
+        let raiz = "/media/TV Show/Breaking Bad";
+        let a = amostra(
+            raiz,
+            &[
+                "Season 1/Breaking Bad S01E01.mkv",
+                "Season 1/Breaking Bad S01E02.mkv",
+                "Season 2/Breaking Bad S02E01.mkv",
+                "Season 2/Breaking Bad S02E02.mkv",
+            ],
+        );
+        assert_eq!(palpitar(&a, Path::new(raiz), 40), Some(Palpite::Serie));
+    }
+
+    #[test]
+    fn palpite_de_filme() {
+        let raiz = "/media/Movies";
+        let a = amostra(
+            raiz,
+            &[
+                "1917 (2019)/1917.2019.1080p.mkv",
+                "Drive (2011)/Drive.2011.720p.mkv",
+                "28 Weeks Later (2007)/28.Weeks.Later.2007.mkv",
+                "Blade Runner 2049 (2017)/Blade.Runner.2049.mkv",
+            ],
+        );
+        assert_eq!(palpitar(&a, Path::new(raiz), 1), Some(Palpite::Filme));
+    }
+
+    /// **Um "extras" no meio de uma série não muda o que a pasta é.**
+    ///
+    /// Sem a folga de um em cinco, quase toda pasta de série viraria "mistura"
+    /// — e um rótulo que aparece em todo lugar não informa nada.
+    #[test]
+    fn um_arquivo_fora_do_padrao_nao_derruba_a_serie() {
+        let raiz = "/media/TV Show/Show";
+        let a = amostra(
+            raiz,
+            &[
+                "Season 1/Show S01E01.mkv",
+                "Season 1/Show S01E02.mkv",
+                "Season 1/Show S01E03.mkv",
+                "Season 1/Show S01E04.mkv",
+                "Extras/Making Of.mkv",
+            ],
+        );
+        assert_eq!(palpitar(&a, Path::new(raiz), 24), Some(Palpite::Serie));
+    }
+
+    #[test]
+    fn metade_e_metade_e_mistura() {
+        let raiz = "/media/Bagunca";
+        let a = amostra(
+            raiz,
+            &[
+                "Show S01E01.mkv",
+                "Show S01E02.mkv",
+                "Drive.2011.mkv",
+                "1917.2019.mkv",
+            ],
+        );
+        assert_eq!(palpitar(&a, Path::new(raiz), 4), Some(Palpite::Mistura));
+    }
+
+    /// §18: sem arquivo nenhum, a tela **omite** em vez de chutar.
+    #[test]
+    fn pasta_sem_video_nao_tem_palpite() {
+        assert_eq!(palpitar(&[], Path::new("/media/Vazia"), 0), None);
+    }
+
+    /// **O caso que veio do acervo, e o que ele ensinou.**
+    ///
+    /// `Bob Esponja` tem 116 vídeos chamados `Bob.Esponja.SO1E09.avi` — com a
+    /// letra **O** no lugar do zero. Nenhum casa como episódio, e o parser está
+    /// certo: quem está errado é o nome no disco.
+    ///
+    /// Antes desta regra a pasta era rotulada **"filme"**, com toda a
+    /// confiança, e isso é o §18 na veia. Os mesmos nomes numa pasta de UM
+    /// vídeo continuam sendo filme; numa pasta com uma temporada inteira
+    /// dentro, a resposta honesta é não ter resposta.
+    #[test]
+    fn quando_o_nome_nao_numera_a_forma_decide() {
+        let raiz = "/media/TV Show/Bob Esponja";
+        let a = amostra(
+            raiz,
+            &[
+                "Temporada 1/Bob.Esponja.SO1E09.avi",
+                "Temporada 1/Bob.Esponja.SO1E35.avi",
+                "Temporada 1/Bob.Esponja.SO1E21.avi",
+                "Temporada 1/Bob.Esponja.SO1E20.avi",
+            ],
+        );
+        let p = Path::new(raiz);
+        assert_eq!(palpitar(&a, p, 39), None, "39 numa pasta só não é um filme");
+        assert_eq!(
+            palpitar(&a, p, 1),
+            Some(Palpite::Filme),
+            "os mesmos nomes, um vídeo só, continuam sendo filme"
+        );
+    }
+
+    /// O corte fica no vazio entre os dois casos medidos: 143 de 143 pastas de
+    /// filme deste acervo têm exatamente 1 vídeo, e a menor pasta de série tem
+    /// 6. Se alguém encostar o corte no dado, este teste cai.
+    #[test]
+    fn o_corte_de_filme_fica_no_vazio_entre_os_dois_casos() {
+        assert!(FILME_NO_MAXIMO >= 1, "toda pasta de filme tem 1 vídeo");
+        assert!(FILME_NO_MAXIMO < 6, "a menor pasta de série tem 6");
+    }
+
+    fn bibliotecas() -> Vec<(String, String)> {
+        vec![
+            ("Filmes (DAS0)".into(), "/media/Movies".into()),
+            ("Séries (DAS0)".into(), "/media/TV Show".into()),
+        ]
+    }
+
+    /// As duas direções, porque `create_library` recusa as duas — e a tela
+    /// precisa saber antes do clique (§53).
+    #[test]
+    fn cobertura_pega_a_pasta_dentro_da_biblioteca() {
+        let c = cobertura(Path::new("/media/Movies/Drive (2011)"), &bibliotecas()).unwrap();
+        assert_eq!(c.biblioteca, "Filmes (DAS0)");
+        assert!(c.dentro);
+    }
+
+    #[test]
+    fn cobertura_pega_a_pasta_que_contem_a_biblioteca() {
+        let c = cobertura(Path::new("/media"), &bibliotecas()).unwrap();
+        assert!(!c.dentro, "/media contém as bibliotecas, não está dentro");
+    }
+
+    #[test]
+    fn pasta_livre_nao_tem_cobertura() {
+        assert!(cobertura(Path::new("/media2/Music"), &bibliotecas()).is_none());
     }
 }

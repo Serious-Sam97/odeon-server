@@ -1,3 +1,17 @@
+# O Odeon, lado servidor: a API e o banco.
+#
+# ## Por que ele subia três coisas e agora sobe duas
+#
+# Até a R51 um `docker-compose.yml` só subia API, banco **e** a interface —
+# porque as três moravam no mesmo repositório. Elas deixaram de morar, e este
+# arquivo era o **único** laço que existia entre elas: não há tipo
+# compartilhado, não há código gerado, não há import cruzado. Rachá-lo em dois
+# foi literalmente apagar um serviço de cada lado.
+#
+# Quem quiser só o servidor roda este arquivo e tem um Odeon inteiro
+# respondendo em :8080 (e :8443 com TLS). A interface é um cliente da API,
+# como qualquer outro — ver o repositório `odeon-client`.
+
 name: odeon
 
 services:
@@ -105,31 +119,8 @@ services:
     devices:
       - nvidia.com/gpu=all
 
-  web:
-    build:
-      context: ./web
-      target: dev
-    container_name: odeon-web
-    restart: unless-stopped
-    depends_on:
-      - api
-    environment:
-      # Vazio de propósito: sem isto o front deduz da própria página (mesmo
-      # host, esquema igual, porta 8080/8443). Assim o mesmo build funciona
-      # em HTTP e em HTTPS, e o usuário pode trocar o servidor na tela de login.
-      VITE_API_URL: ${VITE_API_URL:-}
-      ODEON_TLS_CERT: ${ODEON_TLS_CERT:-}
-      ODEON_TLS_KEY: ${ODEON_TLS_KEY:-}
-    ports:
-      - "${WEB_PORT:-5174}:5173"
-    volumes:
-      - ./web:/app:z
-      - web-modules:/app/node_modules
-      - ./certs:/certs:ro,z
-
 volumes:
   db-data:
   cargo-registry:
   cargo-target:
-  web-modules:
   cache:

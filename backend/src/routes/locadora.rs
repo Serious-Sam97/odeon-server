@@ -1179,6 +1179,71 @@ pub struct Fita {
 ///
 /// > *"você descobre quando põe pra tocar — não na estante, não antes"*
 ///
+/// R50 — o que EU posso assistir agora.
+///
+/// ## Por que uma rota, e não um campo em cada obra
+///
+/// Nove telas oferecem play, e elas montam a obra de seis rotas diferentes
+/// (`/api/works`, `/api/para-voce`, a ficha, a coleção, o menu de disco, a
+/// locadora). Pendurar um booleano em cada uma dessas respostas seria a mesma
+/// regra escrita seis vezes — e o `WorkListItem` é `sqlx::FromRow`, então cada
+/// coluna nova ali custa quatro projeções SQL (§14).
+///
+/// Uma pergunta, uma resposta, e o cliente guarda: **a lista só muda quando
+/// alguém pega ou devolve uma fita**, e isso já é um evento do barramento
+/// (`AppEvent::Locadora`) desde a R19.
+///
+/// ## Com a regra desligada ela vem vazia, de propósito
+///
+/// `exige: false` quer dizer *"tudo liberado"*, e aí listar 17.498 ids seria
+/// mandar meio megabyte pra dizer "sim". A tela lê `exige` primeiro.
+///
+/// ## A expansão é a mesma do `acesso`
+///
+/// Dois níveis de coleção (série → temporada → obra), como o `pode_assistir` e
+/// como o `OBRAS_DA_CAIXA`. Se as duas divergirem, a tela oferece o que os bytes
+/// negam — que é exatamente o defeito que esta fase existe pra apagar.
+#[derive(Debug, Serialize)]
+pub struct Liberadas {
+    /// A escassez está ligada — a regra vale.
+    pub exige: bool,
+    /// As obras cobertas pelos meus empréstimos em aberto. Vazia quando
+    /// `exige` é falso.
+    pub works: Vec<Uuid>,
+}
+
+pub async fn liberadas(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Json<Liberadas>> {
+    let exige = crate::auth::acesso::exige_emprestimo(&state.pool).await;
+    if !exige && crate::auth::acesso::e_morador(&user) {
+        return Ok(Json(Liberadas { exige: false, works: Vec::new() }));
+    }
+
+    let works: Vec<Uuid> = sqlx::query_scalar(
+        r#"
+        SELECT DISTINCT w.id
+        FROM emprestimo e
+        JOIN work w ON (
+            w.id = e.work_id
+            OR (e.collection_id IS NOT NULL AND w.id IN (
+                  SELECT ci.work_id
+                  FROM collection_item ci
+                  JOIN collection c ON c.id = ci.collection_id
+                  WHERE c.id = e.collection_id OR c.parent_id = e.collection_id
+            ))
+        )
+        WHERE e.devolvido_em IS NULL AND e.user_id = $1
+        "#,
+    )
+    .bind(user.id)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(Json(Liberadas { exige: true, works }))
+}
+
 /// Mandar o estado junto com as 40 caixas da vitrine seria mais barato em
 /// requisições e destruiria a única coisa que esta tela tem: a surpresa. A
 /// estante não sabe, de propósito.

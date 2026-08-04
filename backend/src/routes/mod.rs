@@ -172,6 +172,9 @@ pub fn router(state: AppState) -> Router {
         // R30: onde está esta fita. Rota própria, chamada **no play** — a
         // estante não sabe, de propósito: você descobre quando põe pra tocar.
         .route("/api/locadora/fita/{id}", get(locadora::fita))
+        // R50 — o que EU posso assistir agora, pra tela não oferecer o que a
+        // validação vai negar (§53).
+        .route("/api/locadora/liberadas", get(locadora::liberadas))
         // --- R21: o menu de DVD ---
         // O menu numa requisição; as cenas em outra, e só quando alguém entra
         // na tela de cenas — extrair doze quadros custa ~6s e ninguém deve

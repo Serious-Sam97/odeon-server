@@ -1,9 +1,14 @@
-# Odeon
+# Odeon — servidor
 
 Um servidor de mídia próprio. Não é um clone do Jellyfin — é a resposta ao que o
 Jellyfin faz mal.
 
 A tese: **não é um catálogo de arquivos, é uma biblioteca que te conhece.**
+
+> **Leia o `docs/DESIGN.md`.** Ele tem 7.900 linhas e registra o **porquê** de
+> cada escolha deste projeto: o que foi medido, o que foi decidido, e os
+> defeitos que apareceram no caminho. É a parte do repositório que não dá pra
+> ler no código.
 
 ---
 
@@ -268,10 +273,27 @@ backend/          Rust — axum + tokio + sqlx
   src/scanner/    walk + ffprobe + parser de nome
   src/metadata/   TMDB + AniList + score de confiança
   src/routes/     API HTTP
-web/              React + TS + Vite
-clients/          Kotlin Multiplatform — celular, TV e iOS (ver clients/README.md)
-  shared/         modelos + Ktor + repositório, sem UI
-  composeApp/     Compose MP: celular Android + iOS
-  tv/             Android TV, foco por D-pad
 docs/DESIGN.md    decisões de arquitetura e o porquê
 ```
+
+### E a interface?
+
+Ela mora em outro repositório: **[`odeon-client`](https://github.com/Serious-Sam97/odeon-client)** — React + TypeScript, mais os
+clientes Kotlin de celular, TV e iOS.
+
+Este aqui é um servidor completo: sobe, varre o disco, identifica, transcodifica
+e serve `/api/...`. Qualquer coisa que fale HTTP consome ele.
+
+
+---
+
+## Licença
+
+**AGPL-3.0.** Você pode usar, modificar e redistribuir — e se servir uma versão
+modificada pela rede, publica o código dela.
+
+É a licença que corresponde ao que este software é: um servidor, usado
+**através** da rede e não distribuído em disco. Com a GPL comum a obrigação
+nunca dispararia, porque servir não é distribuir.
+
+Ver `LICENSE`.
