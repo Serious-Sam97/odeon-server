@@ -21,15 +21,32 @@ visto rodando**: o emulador segfalta neste computador, em sete configurações
 diferentes. O diagnóstico completo está em `android/README.md` do outro
 repositório.
 
-O outro computador já tem emulador funcionando e está na mesma tailnet. Então:
+O outro computador já tem emulador funcionando e está na mesma tailnet, e passa a
+ser o dono do app Android.
 
-| `serious-server` (aqui) | o outro computador |
-|---|---|
-| **este servidor**, com o acervo de verdade | rodar o app Android |
-| a web, o banco, a identificação | screenshot, achar defeito |
-| escrever, compilar, testar o app | consertar e reportar |
+## ⚠️ E este repositório continua sendo trabalho do `serious-server`
 
-O app continua sendo compilável aqui — o que não funciona é vê-lo na tela.
+O corte é por pasta, e é curto de dizer:
+
+| | o outro computador | `serious-server` |
+|---|---|---|
+| `odeon-client/android/` | ✅ inteiro | não toca |
+| `odeon-client/web/` e `clients/` | ❌ | ✅ |
+| **`odeon-server/` (aqui)** | ❌ **nada, nunca** | ✅ |
+| o banco, a identificação, as migrações | ❌ | ✅ |
+
+**O outro computador não abre este repositório.** Ele consome a API por HTTP e
+mais nada — como qualquer cliente, e como a separação dos repositórios já
+determinava (§67).
+
+Quando o app precisar de uma mudança de servidor — e a espec já prevê duas, o
+`ODEON_ALLOWED_ORIGINS` pro Cast (§4c) e talvez a porta padrão —, o pedido volta
+pra cá descrito, e quem mexe é quem está na máquina.
+
+Não é burocracia. As migrações são embutidas no binário em tempo de compilação
+(`sqlx::migrate!`), este servidor está no ar servindo três pessoas de verdade, e
+a identificação leva ~1h e morre se o processo reiniciar. "Só ajustar uma linha"
+daqui é a forma mais curta de derrubar tudo isso.
 
 ---
 
