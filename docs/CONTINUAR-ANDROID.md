@@ -40,8 +40,17 @@ mais nada — como qualquer cliente, e como a separação dos repositórios já
 determinava (§67).
 
 Quando o app precisar de uma mudança de servidor — e a espec já prevê duas, o
-`ODEON_ALLOWED_ORIGINS` pro Cast (§4c) e talvez a porta padrão —, o pedido volta
-pra cá descrito, e quem mexe é quem está na máquina.
+`ODEON_ALLOWED_ORIGINS` pro Cast (§4c) e talvez a porta padrão —, **o caminho
+passa pelo dono**: o outro computador avisa o que falta, ele traz o pedido pra
+cá, e quem mexe é quem está na máquina, olhando o que ela está fazendo naquele
+momento.
+
+O formato do pedido está no documento do cliente: o que precisa, por quê, o que
+quebra sem isso, e **o que já foi tentado do lado do cliente**. Esse último item
+é o que evita mudar o servidor à toa — a própria espec tem o exemplo: com Cast, a
+negociação de reprodução passa a falar de outro aparelho, e o conserto é o app
+mandar o perfil do Chromecast em `/api/playback/{id}/plan`, que já aceita a lista
+como parâmetro. Nenhuma linha daqui.
 
 Não é burocracia. As migrações são embutidas no binário em tempo de compilação
 (`sqlx::migrate!`), este servidor está no ar servindo três pessoas de verdade, e
