@@ -79,6 +79,26 @@ pub struct MatchStatus {
     pub errors: Vec<String>,
     pub started_at: Option<DateTime<Utc>>,
     pub finished_at: Option<DateTime<Utc>>,
+
+    /// R55 — quantas obras ainda **não entraram** nos contadores da biblioteca.
+    ///
+    /// Aqueles contadores (`FORMATO`) filtram pela tag `format:`, e ela só é
+    /// escrita na identificação — então uma obra varrida e não identificada
+    /// existe no acervo e não aparece ali. Era o que fazia a tela dizer "filme
+    /// 713" com 936 filmes no disco, sem nada explicando a diferença.
+    ///
+    /// **Não é "obras sem tag", e a diferença é o que torna o número honesto:**
+    ///
+    /// | fora da conta | por quê |
+    /// |---|---|
+    /// | biblioteca com `provider_hint = 'none'` | o YouTube e os clipes **nunca** vão ser identificados; contá-los seria prometer um trabalho que não existe |
+    /// | `ignored` | alguém já decidiu, e decisão não é pendência |
+    ///
+    /// Vem no status da identificação, e não numa rota nova, porque a tela já
+    /// pergunta este endereço de dois em dois segundos — um número a mais aqui
+    /// custa zero requisição.
+    #[serde(default)]
+    pub nao_identificadas: i64,
 }
 
 pub type SharedMatchStatus = Arc<Mutex<MatchStatus>>;

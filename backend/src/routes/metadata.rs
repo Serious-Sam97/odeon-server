@@ -88,6 +88,28 @@ pub async fn status(State(state): State<AppState>) -> Json<metadata::MatchStatus
     }
 
     current.tmdb_enabled = state.providers.tmdb.is_some();
+
+    // O que falta pra biblioteca contar tudo. Uma consulta, no mesmo endereço
+    // que a tela já pergunta.
+    current.nao_identificadas = sqlx::query_scalar::<_, i64>(
+        r#"
+        SELECT count(*)
+        FROM work w
+        WHERE NOT EXISTS (
+                SELECT 1 FROM work_tag wt JOIN tag t ON t.id = wt.tag_id
+                WHERE wt.work_id = w.id AND t.namespace = 'format'
+              )
+          AND w.match_state <> 'ignored'
+          AND EXISTS (
+                SELECT 1 FROM media_file mf JOIN library l ON l.id = mf.library_id
+                WHERE mf.work_id = w.id AND l.provider_hint <> 'none'
+              )
+        "#,
+    )
+    .fetch_one(&state.pool)
+    .await
+    .unwrap_or(0);
+
     Json(current)
 }
 
