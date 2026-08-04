@@ -1,5 +1,7 @@
 # Odeon — servidor
 
+[![testes](https://github.com/Serious-Sam97/odeon-server/actions/workflows/testes.yml/badge.svg)](https://github.com/Serious-Sam97/odeon-server/actions/workflows/testes.yml)
+
 Um servidor de mídia próprio. Não é um clone do Jellyfin — é a resposta ao que o
 Jellyfin faz mal.
 

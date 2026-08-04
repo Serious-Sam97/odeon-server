@@ -1,0 +1,58 @@
+# Os 252 testes, a cada push.
+#
+# ## Por que isto existe, e por que só agora
+#
+# O `DESIGN.md` registrou a dívida em três rodadas seguidas: *"testes e nenhum
+# CI — nada os roda automaticamente"*. Ela era a que mais pagava juros, e o
+# número que prova isso está lá: **três das nove fases da rodada 2 acharam
+# defeitos que estavam calados havia meses**, e a rodada 3 achou mais quatro.
+# Nenhum deles apareceu numa leitura de código.
+#
+# ## O que ele roda, e o que deliberadamente NÃO roda
+#
+# Roda `cargo test`. Só.
+#
+# **Não roda `cargo fmt --check`**: o acervo nunca passou por um formatador, e
+# um CI que falha no primeiro dia ensina a ignorar CI. Reformatar 1,5M de código
+# é uma decisão de quem mantém o projeto, não um efeito colateral de ligar
+# integração contínua.
+#
+# **Não roda `clippy` como bloqueio** pela mesma razão: o build tem avisos hoje,
+# e transformá-los em erro de uma vez pararia a esteira sem ninguém ter
+# decidido isso.
+#
+# ## E não precisa de banco
+#
+# `sqlx` aqui é tudo em tempo de execução — não há uma única macro `query!`, que
+# é o que exigiria um Postgres vivo (ou dados offline) só pra compilar. Os testes
+# são de regra pura: parser de nome, permissão, palpite de pasta, geometria de
+# estante. Um runner limpo dá conta.
+name: testes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  cargo-test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # Sem cache, cada push recompila ~300 dependências do zero e a esteira
+      # leva minutos que ninguém espera — e um CI que ninguém espera é um CI
+      # que ninguém lê.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+
+      # `--locked` para o CI testar as versões que estão no `Cargo.lock`, e não
+      # as que o resolvedor escolher no dia. Sem isso, uma quebra de dependência
+      # de terceiro aparece como se fosse defeito deste código.
+      - run: cargo test --locked --verbose
