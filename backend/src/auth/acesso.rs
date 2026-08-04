@@ -13,34 +13,61 @@
 //!
 //! ## A regra
 //!
-//! | papel | escassez desligada | escassez **ligada** |
-//! |---|---|---|
-//! | `admin`, `user` | **tudo** — o disco é deles | **só o que pegou emprestado** |
-//! | `guest` | só o emprestado | só o emprestado |
+//! | papel | pode assistir |
+//! |---|---|
+//! | `admin`, `user` | **tudo** — o disco é deles |
+//! | `guest` | só o que pegou emprestado |
 //!
-//! ## A chave é a escassez, e isso é R50
+//! E a escassez **não entra nesta conta**. Isso é R56, e desfaz a R50.
 //!
-//! *"Para dar play nos filmes é necessário pegar emprestado (SOMENTE MODO
-//! LOCADORA)"* — e o "modo locadora" **já existia**: é a escassez da R29, que
-//! significa *"uma cópia por caixa, e quem pegou tirou da prateleira"*.
+//! ## O que a R50 leu errado, e o que a R56 corrigiu
 //!
-//! Exigir o empréstimo pra assistir é a **consequência** disso, não uma regra
-//! ao lado. Com a escassez desligada a locadora é um tema; com ela ligada, é o
-//! mecanismo — e uma cópia que some da estante mas continua tocando pra todo
-//! mundo nunca foi uma cópia só.
+//! O pedido era: *"Para dar play nos filmes é necessário pegar emprestado
+//! (SOMENTE MODO LOCADORA)"*.
 //!
-//! Por isso não há chave nova no painel: seria uma segunda chave dizendo a
-//! mesma coisa, e duas chaves pra uma ideia é como um estado impossível nasce.
+//! `(SOMENTE MODO LOCADORA)` tem duas leituras, e a R50 escolheu a primeira:
 //!
-//! ## Vale pro administrador também, e é decisão
+//! 1. **"só quando o modo locadora estiver ligado"** — a escassez como chave, e
+//!    a regra valendo em todo lugar que toca vídeo
+//! 2. **"só dentro da locadora"** — a locadora como *lugar*, e a biblioteca
+//!    fora dela
 //!
-//! Uma regra com porta dos fundos pro dono não é uma regra — é um tema. O `admin`
-//! entra na fila como todo mundo, e o que o distingue continua sendo o que sempre
-//! distinguiu: ele **desliga a escassez** quando quiser, num clique, pra casa
-//! inteira de uma vez.
+//! Era a segunda. Nas palavras do dono, em 04/08/2026: *"a biblioteca é um modo
+//! livre"*.
 //!
-//! O que isto **não** muda: quem já é `guest` continua exatamente como estava,
-//! porque pra ele o empréstimo sempre foi obrigatório.
+//! ## O que isso muda no que a R50 argumentou
+//!
+//! A R50 dizia que uma regra com porta dos fundos não é regra — é tema. **Isso
+//! continua verdade, e agora é o ponto:** a exigência de empréstimo vira
+//! explicitamente uma regra *da locadora*, cumprida pela tela dela, e não um
+//! cadeado sobre os bytes.
+//!
+//! E não podia ser diferente, por uma razão técnica que a R50 não enfrentou: o
+//! servidor **não distingue** "abriu pela biblioteca" de "abriu pela locadora".
+//! Quem pede é o mesmo `/plan` com o mesmo `media_file_id`. Uma regra que só
+//! vale num lugar, num protocolo que não sabe de lugar, só pode ser cumprida por
+//! quem sabe onde está — o cliente.
+//!
+//! Fazer o cliente **declarar** de onde veio seria pior: um cadeado cuja chave
+//! está com quem ele deveria trancar. Melhor não fingir cadeado.
+//!
+//! ## A locadora não perdeu nada, e isso foi medido
+//!
+//! A tela da locadora **nunca consultou** esta regra. Ela decide com `comigo` —
+//! se a caixa está na sua mão —, que é estado da própria caixa, não do acesso.
+//! Os botões continuam dizendo "pegue emprestado", a caixa continua saindo da
+//! prateleira, o prazo continua vencendo. A brincadeira está inteira.
+//!
+//! Quem consultava era a **biblioteca**: as coleções, a ficha, o "para você" e o
+//! funil de dar play. Eram esses os afetados, e é deles que a regra saiu.
+//!
+//! ## O `guest` não muda, e é o que sobra de cadeado
+//!
+//! Pra ele o empréstimo sempre foi obrigatório — desde a R26, antes da escassez
+//! existir. Ele não é dono do disco, e a biblioteca não é dele: o que ele
+//! alcança é o que alguém lhe emprestou.
+//!
+//! Ou seja, esta função volta a ser exatamente o que era antes da R50.
 //!
 //! **A R28 tirou o círculo daqui, e a regra não mudou.** As duas consultas
 //! abaixo cruzavam com `circulo_membro` pra confirmar que o convidado era do
@@ -79,24 +106,24 @@ pub fn e_morador(user: &User) -> bool {
 /// O alcance de coleção é de dois níveis (série → temporada → obra), como o
 /// `OBRAS_DA_CAIXA` da locadora, e pela mesma razão: a profundidade é conhecida.
 pub async fn pode_assistir(pool: &PgPool, user: &User, media_file_id: Uuid) -> bool {
-    // **A escassez é lida na MESMA consulta**, e não numa antes.
+    // **R56: o morador passa, e a escassez não é consultada.**
     //
-    // Esta função roda a cada requisição de faixa do `<video>` — dezenas por
-    // minuto num filme sendo assistido. Ler a opção em separado dobraria as idas
-    // ao banco de tudo que toca. Aqui é uma linha a mais num `SELECT` que já
-    // existia, sobre uma tabela de **uma** linha com chave primária.
+    // Era `($3 AND COALESCE((SELECT NOT escassez FROM locadora_opcoes), true))`,
+    // e a subconsulta saiu junto com a regra — ver o cabeçalho do módulo.
     //
-    // O `COALESCE` erra pro lado aberto de propósito: sem linha de opções não há
-    // locadora configurada, e trancar o disco da casa por causa de uma tabela
-    // vazia seria transformar uma ausência de configuração em bloqueio.
+    // Como efeito colateral, esta função voltou a não tocar `locadora_opcoes`.
+    // Ela roda a cada requisição de faixa do `<video>`, dezenas por minuto num
+    // filme sendo assistido; é uma tabela a menos no caminho mais quente do
+    // servidor.
     //
-    // **`devolvido_em IS NULL` é a autorização inteira.** Quando a fita volta —
-    // por devolução ou por prazo (§35) — o acesso acaba no mesmo instante, sem
-    // nenhuma revogação em separado pra alguém esquecer de escrever.
+    // **`devolvido_em IS NULL` é a autorização inteira** — pro `guest`, que é
+    // quem ainda depende dela. Quando a fita volta, por devolução ou por prazo
+    // (§35), o acesso acaba no mesmo instante, sem nenhuma revogação em separado
+    // pra alguém esquecer de escrever.
     sqlx::query_scalar::<_, bool>(
         r#"
         SELECT
-        ($3 AND COALESCE((SELECT NOT escassez FROM locadora_opcoes), true))
+        $3
         OR EXISTS (
             SELECT 1
             FROM media_file mf
@@ -125,10 +152,11 @@ pub async fn pode_assistir(pool: &PgPool, user: &User, media_file_id: Uuid) -> b
 /// A mesma pergunta, quando o que se tem é a obra e não o arquivo — o menu de
 /// DVD (§37) e as cenas trabalham assim.
 pub async fn pode_assistir_obra(pool: &PgPool, user: &User, work_id: Uuid) -> bool {
+    // R56, igual à irmã acima: o morador passa, a escassez não é consultada.
     sqlx::query_scalar::<_, bool>(
         r#"
         SELECT
-        ($3 AND COALESCE((SELECT NOT escassez FROM locadora_opcoes), true))
+        $3
         OR EXISTS (
             SELECT 1
             FROM emprestimo e
@@ -153,11 +181,17 @@ pub async fn pode_assistir_obra(pool: &PgPool, user: &User, work_id: Uuid) -> bo
     .unwrap_or(false)
 }
 
-/// A regra está valendo agora?
+/// A escassez está ligada?
 ///
-/// A tela precisa saber **antes** de desenhar o botão: um ▸ assistir que leva
-/// 403 é o §8b, e o §53 já disse que o produto não oferece o que ele sabe que
-/// vai negar. É a única leitura da opção feita fora do caminho dos bytes.
+/// **R56: isto não decide mais quem assiste.** Ela responde sobre a *locadora* —
+/// se as caixas são uma cópia só, se pegar tira da prateleira, se o prazo vence.
+/// A biblioteca não pergunta.
+///
+/// Continua servindo à tela da locadora, que precisa saber antes de desenhar os
+/// botões dela, e ao `guest`, pra quem o empréstimo segue obrigatório.
+///
+/// E continua sendo a única leitura de `locadora_opcoes` fora do caminho dos
+/// bytes — depois da R56, o caminho dos bytes não a lê mais em lugar nenhum.
 pub async fn exige_emprestimo(pool: &PgPool) -> bool {
     sqlx::query_scalar::<_, bool>("SELECT escassez FROM locadora_opcoes")
         .fetch_optional(pool)
@@ -208,19 +242,34 @@ mod tests {
         assert!(!e_morador(&com_papel("")));
     }
 
-    /// **A R50 não mexeu no convidado, e isto guarda isso.**
+    /// **A R56 libertou a biblioteca, e não o convidado. Isto guarda isso.**
     ///
-    /// `e_morador` é o único parâmetro que a consulta recebe além do usuário e
-    /// do alvo: com `false`, o primeiro termo do `SELECT` morre e sobra o
-    /// `EXISTS` do empréstimo — exatamente a regra que o convidado já tinha
-    /// desde a R26. Se alguém inverter esta função, o convidado vira morador em
-    /// silêncio e a escassez deixa de valer pra ele.
+    /// `e_morador` virou o primeiro termo inteiro do `SELECT` — com `true` o
+    /// morador passa direto, com `false` sobra o `EXISTS` do empréstimo.
+    ///
+    /// Ou seja, esta função sozinha decide quem tem a biblioteca livre. Se
+    /// alguém fizer `guest` devolver `true`, o convidado deixa de precisar de
+    /// empréstimo e passa a alcançar o acervo inteiro — em silêncio, e sem
+    /// nenhuma outra linha mudar.
     #[test]
-    fn a_escassez_nao_afrouxa_o_convidado() {
+    fn a_biblioteca_livre_e_do_morador_e_nao_do_convidado() {
         assert!(!e_morador(&com_papel("guest")));
-        // E o administrador entra na conta como qualquer morador: é ele que
-        // desliga a escassez, não que escapa dela.
         assert!(e_morador(&com_papel("admin")));
+        assert!(e_morador(&com_papel("user")));
+    }
+
+    /// O 403 continua existindo, e continua sendo do convidado.
+    ///
+    /// A R56 tirou o "não" do caminho do morador, não do produto: um `guest`
+    /// que tenta assistir o que ninguém lhe emprestou ainda recebe `negado()`, e
+    /// a frase ainda tem que apontar a locadora.
+    #[test]
+    fn o_convidado_ainda_pode_ouvir_nao() {
+        assert!(!e_morador(&com_papel("guest")));
+        let crate::error::AppError::Forbidden(msg) = negado() else {
+            panic!("negado() deixou de ser 403");
+        };
+        assert!(!msg.is_empty());
     }
 
     /// O "não" aponta a saída. Um 403 mudo faria o convidado concluir que o

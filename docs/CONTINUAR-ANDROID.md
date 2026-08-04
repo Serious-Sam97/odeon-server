@@ -176,9 +176,18 @@ docker exec odeon-db psql -U odeon -d odeon -c "SELECT ..."
 Nada de novo, e isso é de propósito — a espec do app (§4b, §6) escolheu só o que
 o servidor **já dá**. Mas vale saber o que morde:
 
-**A escassez (§66).** Assistir exige empréstimo em aberto, **inclusive pro
-admin**. O app tem que perguntar `/api/locadora/liberadas` **antes** de desenhar
-o botão de play, ou a tela oferece um 403. Isso entra na fase 2.
+**A escassez (§66 → §71).** ⚠️ **Isto mudou em 04/08/2026.** Assistir **não**
+exige mais empréstimo pro morador: a biblioteca é modo livre, e a exigência
+ficou sendo regra da locadora. O `pode_assistir` voltou ao que era antes da R50,
+e o `guest` não mudou. Ver §71.
+
+A regra anterior dizia que o app tinha que perguntar
+`/api/locadora/liberadas` antes de desenhar o play, ou a tela ofereceria um 403.
+Não é mais assim — e foi justamente o app Android, tentando tocar de fora da
+locadora, que encontrou o defeito.
+
+A rota continua existindo e continua verdadeira: ela diz quais obras os
+empréstimos de alguém cobrem. Serve à locadora, não ao player.
 
 **O token de mídia (§43).** Curto (8h), vai em `?token=` porque `<img>` e o
 player não mandam header. **Emitir um novo aposenta o anterior** — e o anterior

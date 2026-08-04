@@ -8208,3 +8208,124 @@ com quatro remendos; o resto pede a mesma medição, formato a formato.
 
 **257 testes** (quatro novos, todos com nomes de arquivo copiados do disco — e
 cada um cobrando também o vizinho que o remendo não pode comer).
+
+---
+
+## 71. R56 — a biblioteca é modo livre, e o que a R50 leu errado
+
+> *"a biblioteca é um modo livre bicho"*
+
+### O pedido tinha duas leituras, e a R50 escolheu a outra
+
+A R50 (§66) nasceu desta frase:
+
+> *"Para dar play nos filmes é necessário pegar emprestado (SOMENTE MODO
+> LOCADORA)"*
+
+`(SOMENTE MODO LOCADORA)` pode ser lido de dois jeitos:
+
+| leitura | o que implica |
+|---|---|
+| **"só quando o modo locadora estiver ligado"** | a escassez é a chave, e a regra vale em todo lugar que toca vídeo |
+| **"só dentro da locadora"** | a locadora é um **lugar**, e a biblioteca fica fora dele |
+
+O §66 argumentou pela primeira, e argumentou bem: *"uma cópia que some da estante
+mas continua tocando pra todo mundo nunca foi uma cópia só"*. A conclusão vinha
+com uma frase que envelheceu mal — *"uma regra com porta dos fundos pro dono não
+é uma regra"* — e fechou a porta em nove telas.
+
+**Era a segunda leitura.** A locadora é a brincadeira; a biblioteca é a casa.
+
+### O que a mudança realmente é, dita sem enfeite
+
+Ela **não** move a regra pra dentro da locadora. Ela a tira do servidor.
+
+O motivo é técnico e a R50 não o enfrentou: **`/api/playback/{id}/plan` não sabe
+de onde o clique veio.** Quem pede é o mesmo cliente, com o mesmo
+`media_file_id`, pela biblioteca ou pela prateleira. Uma regra que só vale num
+lugar, num protocolo que não sabe de lugar, só pode ser cumprida por quem sabe
+onde está — a tela.
+
+E fazer o cliente **declarar** a origem seria pior: um cadeado cuja chave está
+com quem ele deveria trancar. Um `?origem=biblioteca` que qualquer `curl`
+escreve não é guarda, é cerimônia — e o projeto tem régua contra isso (§18: não
+mentir com cara de metadado; §8b: errar em silêncio é o defeito).
+
+Então: **a exigência de empréstimo passa a ser regra de jogo, não de acesso.**
+Ela vale porque quem joga aceita, como qualquer regra de jogo de tabuleiro. É o
+que ela sempre foi na cabeça de quem pediu.
+
+### A locadora não perdeu nada, e isso foi medido antes de mexer
+
+`Locadora.tsx` **nunca consultou** `pode_assistir` nem a loja `liberadas`. Ela
+decide com `comigo` — se a caixa está na sua mão —, que é estado da própria
+caixa. Os botões continuam dizendo "pegue emprestado", a caixa continua saindo
+da prateleira, o prazo continua vencendo, o "pedir de volta" continua existindo.
+
+Quem consultava era a **biblioteca**: as coleções, a ficha, o "para você" e o
+funil de `App.tocar()`. Foram esses os libertados.
+
+### O que mudou, linha a linha
+
+**No servidor**, `acesso::pode_assistir` e `pode_assistir_obra` voltaram a ser o
+que eram antes da R50:
+
+```sql
+-- antes (R50)
+($3 AND COALESCE((SELECT NOT escassez FROM locadora_opcoes), true)) OR EXISTS (…)
+-- agora (R56)
+$3 OR EXISTS (…)
+```
+
+Com um efeito colateral que vale registrar: **o caminho mais quente do servidor
+parou de ler `locadora_opcoes`.** Essa função roda a cada requisição de faixa do
+`<video>`, dezenas por minuto num filme sendo assistido. É uma tabela a menos.
+
+**O `guest` não mudou uma linha.** Pra ele o empréstimo sempre foi obrigatório,
+desde a R26 — antes de a escassez existir. Ele não é dono do disco, e o que
+alcança continua sendo o que alguém lhe emprestou. É o `$3` que separa os dois
+mundos, e é por isso que ele ganhou teste com nome dizendo isso.
+
+**Na interface**, o cadeado saiu de quatro arquivos: `App.tsx` (o funil inteiro,
+que virou `setPlaying(w)`), `Details.tsx`, `Collections.tsx` e `ForYou.tsx`.
+
+E `liberadas.ts` **foi apagado**. Ele existia pra sincronizar entre nove telas
+uma resposta que nenhuma pede mais; o que sobrou dele é a frase do tooltip, que
+mudou de dono e foi morar dentro de `Locadora.tsx`. Código morto que implementa
+uma regra extinta é pior que código nenhum — ele descreve um produto que não
+existe.
+
+`GET /api/locadora/liberadas` **fica.** Ela responde uma pergunta que continua
+verdadeira — quais obras os meus empréstimos cobrem — e a locadora do app
+Android (fase 5) vai querer. O que ela não é mais é a guarda de ninguém.
+
+### O que se perde, e é aceito
+
+Com a escassez ligada, uma fita emprestada a outra pessoa **continua tocando pra
+você pela biblioteca**. A caixa some da prateleira, o objeto está com quem pegou,
+e os bytes seguem abertos.
+
+Isso é exatamente o que o §66 chamou de "porta dos fundos", e agora é a porta da
+frente. A escassez descreve a **estante**, não o disco — e o disco sempre foi da
+casa.
+
+### Medido
+
+`sam`, em *007: A Serviço Secreto de Sua Majestade*, sem empréstimo em aberto e
+com a escassez **ligada**:
+
+| | pode assistir |
+|---|---|
+| regra da R50 | `false` |
+| regra da R56 | `true` |
+| `guest`, R56 | `false` |
+
+**258 testes** (um novo: o que guarda que a biblioteca livre é do morador e não
+do convidado).
+
+### O que isto destravou
+
+A fase 2 do app Android — ficha, player e selo do modo — estava escrita e não
+tinha como ser vista: `/plan` é a primeira chamada do player, e era ela que
+negava. Foi o app quem encontrou o defeito, e ele o encontrou porque tentou
+tocar de fora da locadora.
