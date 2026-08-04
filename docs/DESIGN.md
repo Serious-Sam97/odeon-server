@@ -8044,3 +8044,61 @@ pessoas. São dois gestos, e o segundo é de quem decide.
 **A montagem é gravável**, como as outras duas (§22, §42) — e este disco tem
 `Backup`, `Games` e `Applications` junto com os filmes. O `:ro` continua sendo
 uma linha.
+
+---
+
+## 69. R53 — o rosto do cabeçalho, maior
+
+Pedido curto: *"aumente o tamanho da foto de perfil"*.
+
+### O que segurava o tamanho, medido
+
+O §63 escolheu 28px de anel porque **23px é o menor círculo em que um rosto de
+ator ainda se reconhece**. O número estava certo e a conclusão era estreita:
+reconhecer não é ver. A 23px o rosto se identifica de perto e some de longe.
+
+O que impedia crescer era a altura da barra, e a medição mostrou exatamente onde:
+
+| elemento | altura |
+|---|---|
+| a busca | **43px** — é ela quem manda |
+| o botão do "eu" | **42px** (anel 28 + 12 de respiro + 2 de borda) |
+| uma aba | 35px |
+
+**Um pixel de folga.** Qualquer crescimento do anel empurrava a barra na razão de
+um para um.
+
+### Metade do crescimento saiu do próprio botão
+
+O respiro vertical do `.gaveta-abre` era 6px, e 6px ali era folga — o botão é uma
+pílula em volta de um círculo, e o círculo já tem margem própria. Passou a 4px.
+
+Com isso o anel foi de **28 para 38px** (+36%) e o rosto de **23 para 33px**
+(+43%), enquanto a barra subiu só **5px**: 80 → 85 no topo, 62 → 67 condensada.
+Sem a troca no respiro teriam sido dez.
+
+O selo do nível cresceu junto — 15 → 18px, fonte 9 → 11px. Um selo que não
+acompanha vira uma bolinha ilegível grudada num retrato grande.
+
+### Verificação
+
+| | |
+|---|---|
+| `sam`, com rosto | anel 38×38, rosto 33×33 carregado, selo 18×18 com o "2" |
+| `gabriel`, sem rosto | marca derivada no mesmo tamanho, com a inicial legível |
+| condensada | barra 67px, selo **dentro** dela |
+| janela de 620px | idem, e o nome some pelo `@media`, como sempre fez |
+
+A letra da marca derivada não precisou de ajuste: ela é desenhada num `viewBox`
+de 40 unidades, então escala junto com o elemento. É o tipo de coisa que só um
+SVG dá de graça.
+
+### Uma nota sobre onde esta seção mora
+
+A mudança é **de cliente** — `styles.css` e `App.tsx`, no `odeon-client`. Esta
+seção está no `odeon-server`, porque foi ali que o `DESIGN.md` inteiro ficou
+(§67).
+
+É a primeira vez que uma fase precisa de dois commits em dois repositórios pra
+existir, e é exatamente o atrito que a separação comprou. Vale a pena continuar
+observando: se virar rotina, o documento é que está no lugar errado.
