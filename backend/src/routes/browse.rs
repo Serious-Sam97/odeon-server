@@ -171,11 +171,32 @@ fn tipica(mut por_subpasta: Vec<usize>) -> usize {
     por_subpasta[por_subpasta.len() / 2]
 }
 
-/// Olha uma pasta **dois níveis pra baixo**, e não um.
+/// Olha uma pasta **três níveis pra baixo**.
 ///
-/// Dois porque é exatamente o layout `Série/Temporada 1/ep.mkv`, que é o que
-/// esta rota não enxergava. E não três: o custo cresce com a árvore, e o
-/// terceiro nível não muda a resposta de nenhum layout que este acervo tem.
+/// Eram dois, e dois cobriam `Série/Temporada 1/ep.mkv`. O terceiro entrou com o
+/// `/mnt/SAM`, que agrupa por franquia e portanto tem um degrau a mais —
+/// `Movies/All Movies/Filme (2024)/arquivo.mkv` e
+/// `TV Shows/Série/Temporada/ep.mkv`. Com dois níveis a tela dizia **"0 vídeos"
+/// numa pasta com 131**, que é o §18 pelo avesso: omitir o que existe engana
+/// tanto quanto inventar o que não existe.
+///
+/// ## O terceiro nível é incondicional, e a primeira tentativa não era
+///
+/// A versão anterior só descia quando o segundo nível vinha vazio — a ideia era
+/// pagar o custo só onde a resposta seria inútil. **Ela contava 123 de 261.**
+///
+/// O que ela perdia são as pastas mistas, e o `/mnt/SAM` tem duas grandes:
+/// `All Movies` (5 arquivos soltos e 93 subpastas) e `Animations` (5 e 45). Um
+/// arquivo solto ali já fazia a condição falhar, e as 93 subpastas sumiam por
+/// causa dos 5.
+///
+/// **E a economia era quase nada.** Medido no pior caso do acervo,
+/// `/media2/TV Show` com 15 mil arquivos: 169ms contra 198ms. Trinta
+/// milissegundos não compram metade de uma contagem.
+///
+/// Não há quarto nível. A cada degrau o custo multiplica pelo número de pastas,
+/// e quatro degraus é onde ficam os "Extras" e os "Disco 2" — que não são o que
+/// alguém procura ao escolher uma pasta.
 async fn olhar(dir: &Path) -> Olhada {
     let mut o = Olhada::default();
 
@@ -211,10 +232,19 @@ async fn olhar(dir: &Path) -> Olhada {
             continue;
         };
         let mut nesta = 0usize;
+        // Guardadas pro terceiro nível, e só usadas se este aqui vier vazio.
+        let mut netos: Vec<PathBuf> = Vec::new();
         while let Ok(Some(neto)) = nivel2.next_entry().await {
             let p = neto.path();
-            if !matches!(neto.file_type().await, Ok(t) if t.is_file()) || !is_video(&p) {
-                continue;
+            match neto.file_type().await {
+                Ok(t) if t.is_dir() => {
+                    if !oculto(&neto.file_name().to_string_lossy()) {
+                        netos.push(p);
+                    }
+                    continue;
+                }
+                Ok(t) if t.is_file() && is_video(&p) => {}
+                _ => continue,
             }
             o.abaixo += 1;
             nesta += 1;
@@ -223,12 +253,36 @@ async fn olhar(dir: &Path) -> Olhada {
             }
             if o.diretos + o.abaixo >= TETO {
                 o.truncado = true;
-                if nesta > 0 {
-                    o.por_subpasta.push(nesta);
-                }
+                o.por_subpasta.push(nesta);
                 return o;
             }
         }
+
+        // O TERCEIRO NÍVEL. `TV Shows/Love Death and Robots/…S03/ep.mkv`: a
+        // pasta da série não tem vídeo solto, tem temporadas — sem descer aqui,
+        // ela some da tela. E sem condição: ver o cabeçalho.
+        for bisneto in &netos {
+            let Ok(mut nivel3) = tokio::fs::read_dir(bisneto).await else {
+                continue;
+            };
+            while let Ok(Some(f)) = nivel3.next_entry().await {
+                let p = f.path();
+                if !matches!(f.file_type().await, Ok(t) if t.is_file()) || !is_video(&p) {
+                    continue;
+                }
+                o.abaixo += 1;
+                nesta += 1;
+                if o.amostra.len() < AMOSTRA {
+                    o.amostra.push(p);
+                }
+                if o.diretos + o.abaixo >= TETO {
+                    o.truncado = true;
+                    o.por_subpasta.push(nesta);
+                    return o;
+                }
+            }
+        }
+
         if nesta > 0 {
             o.por_subpasta.push(nesta);
         }
@@ -505,6 +559,66 @@ mod tests {
         assert!(is_video(Path::new("/x/a.mp4")));
         assert!(!is_video(Path::new("/x/legenda.srt")));
         assert!(!is_video(Path::new("/x/sem-extensao")));
+    }
+
+    /// **O caso que o `/mnt/SAM` trouxe, e ele é de disco, não de regra.**
+    ///
+    /// Aquele disco agrupa por franquia, então a árvore tem um degrau a mais:
+    /// `TV Shows/Série/Temporada/ep.mkv`. Com dois níveis a tela dizia
+    /// **"0 vídeos" numa pasta com 131** — e "0" numa pasta cheia é o §18 pelo
+    /// avesso.
+    ///
+    /// O teste monta três formas: a rasa (que já contava), a funda (que sumia)
+    /// e a **mista** — um arquivo solto ao lado de subpastas cheias. A mista é
+    /// o caso que derrubou a primeira versão desta regra, que só descia quando
+    /// o segundo nível vinha vazio: um arquivo solto fazia 93 subpastas
+    /// sumirem.
+    #[tokio::test]
+    async fn o_terceiro_nivel_vale_ate_na_pasta_mista() {
+        let raiz = std::env::temp_dir().join(format!("odeon-olhar-{}", std::process::id()));
+        let _ = tokio::fs::remove_dir_all(&raiz).await;
+
+        // Rasa: Filmes/Filme (2024)/arquivo.mkv — dois níveis bastam.
+        let rasa = raiz.join("rasa").join("Filme (2024)");
+        tokio::fs::create_dir_all(&rasa).await.unwrap();
+        tokio::fs::write(rasa.join("Filme.2024.mkv"), b"").await.unwrap();
+
+        // Funda: Series/Serie/Temporada 3/ep.mkv — três.
+        let funda = raiz.join("funda").join("Serie").join("Temporada 3");
+        tokio::fs::create_dir_all(&funda).await.unwrap();
+        for ep in ["S03E01", "S03E02", "S03E03"] {
+            tokio::fs::write(funda.join(format!("Serie.{ep}.mkv")), b"").await.unwrap();
+        }
+
+        let r = olhar(&raiz.join("rasa")).await;
+        assert_eq!(r.abaixo, 1, "a pasta rasa continua contando como antes");
+
+        let f = olhar(&raiz.join("funda")).await;
+        assert_eq!(f.abaixo, 3, "sem o terceiro nível isto seria 0, e a tela mentiria");
+        assert_eq!(
+            f.por_subpasta,
+            vec![3],
+            "os três contam pra FORMA da pasta, senão o palpite decide no escuro"
+        );
+
+        // MISTA: um solto e duas subpastas com dois cada. Total 5.
+        let mista = raiz.join("mista").join("All Movies");
+        tokio::fs::create_dir_all(&mista).await.unwrap();
+        tokio::fs::write(mista.join("Solto.2020.mkv"), b"").await.unwrap();
+        for pasta in ["Filme A (2021)", "Filme B (2022)"] {
+            let d = mista.join(pasta);
+            tokio::fs::create_dir_all(&d).await.unwrap();
+            tokio::fs::write(d.join("a.mkv"), b"").await.unwrap();
+            tokio::fs::write(d.join("b.mkv"), b"").await.unwrap();
+        }
+        let m = olhar(&raiz.join("mista")).await;
+        assert_eq!(
+            m.abaixo, 5,
+            "o arquivo solto não pode fazer as subpastas sumirem — foi assim que \
+             a primeira versão contou 123 de 261 no /mnt/SAM"
+        );
+
+        let _ = tokio::fs::remove_dir_all(&raiz).await;
     }
 
     fn amostra(raiz: &str, nomes: &[&str]) -> Vec<PathBuf> {

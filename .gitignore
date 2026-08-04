@@ -1,8 +1,13 @@
 # ---------------------------------------------------------------- segredos
 # O .env carrega a chave do TMDB e a senha do Postgres. NUNCA versionar.
 # O .env.example é o modelo, esse sim vai pro repositório.
-.env
-.env.local
+#
+# **Padrão, e não dois nomes exatos.** A regra era `.env` e `.env.local`, e um
+# backup chamado `.env.antes-do-SAM` passou direto por ela — foi pego no stage,
+# a caminho de um repositório público, com três chaves dentro. Um `.gitignore`
+# que depende de a pessoa escolher o nome certo não protege nada.
+.env*
+!.env.example
 *.pem
 *.key
 *.crt

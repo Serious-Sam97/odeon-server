@@ -7953,3 +7953,94 @@ dentro do mesmo repositório, onde um `grep` alcançava as duas pontas. Agora s�
 dois repositórios, e uma rota que mude de forma no servidor não tem mais nada
 que avise o cliente. É a dívida que a separação cria, e ela é o preço da
 decisão — não um descuido.
+
+---
+
+## 68. R52 — um terceiro disco, e a limitação que virou defeito
+
+Um disco novo entrou no servidor: `/mnt/SAM`, montado em `/media3`. Ele traz
+**261 filmes e 131 episódios**, e trouxe junto um defeito que estava escrito
+como hipótese.
+
+### O que a montagem exigiu, e o que ela não exigiu
+
+Nada de código. `MEDIA_PATH_3` já existia no `.env` e no compose, e
+`ODEON_MEDIA_ROOTS` já listava `/media3` — a variável estava vazia, então o
+compose montava `${MEDIA_PATH_3:-${MEDIA_PATH}}`, o mesmo disco duas vezes, e o
+`distinct_dirs` do §config descartava a duplicata por `(dev, inode)`. Preencher a
+variável foi a mudança inteira.
+
+Duas conferências antes de mexer, e as duas por medição:
+
+| | |
+|---|---|
+| é disco distinto? | `dev` **2065**, contra 2082 e 2098 — não é duplicata |
+| o SELinux deixa ler? | contexto `dosfs_t`, o mesmo dos dois que já funcionam |
+
+### E aí o §65 mostrou o seu próprio buraco
+
+A R49 registrou como dívida: *"A profundidade é dois, e é uma escolha.
+`Série/Temporada/Disco 1/ep.mkv` seria contado a menos. Nenhuma pasta deste
+acervo tem esse formato hoje."*
+
+**Hoje tem.** O `/mnt/SAM` agrupa por franquia, e isso põe um degrau a mais:
+
+```
+Movies/All Movies/Filme (2024)/arquivo.mkv
+TV Shows/Série/Temporada/ep.mkv
+```
+
+Com dois níveis, a tela dizia **"0 vídeos" numa pasta com 131**. Isso é o §18
+pelo avesso — omitir o que existe engana tanto quanto inventar o que não existe
+—, e é pior aqui do que em qualquer outro lugar, porque é justamente a tela onde
+alguém decide o que entra no acervo.
+
+### A primeira correção estava errada, e o número disse isso
+
+O terceiro nível entrou **condicional**: descia só quando o segundo vinha vazio,
+pra pagar o custo apenas onde a resposta era inútil. Parecia certo.
+
+**Contou 123 de 261.**
+
+O que ela perdia são as pastas **mistas**, e este disco tem duas grandes: `All
+Movies` (5 arquivos soltos e 93 subpastas) e `Animations` (5 e 45). Um único
+arquivo solto fazia a condição falhar, e 93 subpastas sumiam por causa de 5.
+
+E a economia que justificava a condição não existia. Medido no pior caso do
+acervo, `/media2/TV Show`, com 15 mil arquivos:
+
+| | |
+|---|---|
+| três níveis | 15.955 arquivos · **169ms** |
+| quatro níveis | 15.112 arquivos · **198ms** |
+
+Trinta milissegundos não compram metade de uma contagem. O terceiro nível passou
+a ser incondicional, e o teste que guarda isso monta a pasta mista de propósito.
+
+### Verificação
+
+| | tela | disco |
+|---|---|---|
+| `/media3/Movies` | **261** | 261 |
+| `/media3/TV Shows` | **131** · *parece série* | 131 |
+
+E os discos antigos não regrediram — melhoraram: `/media/TV Show` foi de 2.532
+para **2.746**, porque passou a enxergar as temporadas que guardam episódio um
+degrau mais fundo.
+
+**253 testes** (um novo, com as três formas lado a lado: rasa, funda e mista).
+
+### O que NÃO está fechado
+
+**A quarta profundidade continua fora**, e agora com número: há **40 arquivos**
+no nível 4 de `/media3/Movies` — "Extras", "Disco 2". Não são o que alguém
+procura ao escolher uma pasta, e cada degrau multiplica o custo pelo número de
+pastas.
+
+**O disco foi montado, e nenhuma biblioteca foi criada.** Montar é dar acesso;
+criar biblioteca dispara varredura e identificação, com efeito no acervo de três
+pessoas. São dois gestos, e o segundo é de quem decide.
+
+**A montagem é gravável**, como as outras duas (§22, §42) — e este disco tem
+`Backup`, `Games` e `Applications` junto com os filmes. O `:ro` continua sendo
+uma linha.
