@@ -90,8 +90,21 @@ static DOTTED_RELEASE: Lazy<Regex> =
 ///
 /// O dígito TEM que vir colado ao `S`/`T`: sem isso "Part 1 e 2" viraria
 /// temporada.
+///
+/// ## O `R` opcional, e de onde ele veio (R54)
+///
+/// `Arrested Development (2003) - S04RE01 - Re Cap'n Bluth.mkv`. O `RE` é a
+/// **Remix** — a temporada 4 que a Netflix recortou e renumerou —, e o `R` no
+/// meio quebrava a expressão inteira: 22 arquivos ficavam sem temporada e sem
+/// episódio, e sem episódio o scanner não cria `collection(série)`. A biblioteca
+/// mostrava 22 cartões idênticos em vez de uma série.
+///
+/// **Um `r?`, e não `[a-z]{0,2}`.** A versão genérica parecia melhor e criava um
+/// falso positivo real: `S02 The 100` casaria como temporada 2, episódio 100 —
+/// e "The 100" é uma série que existe. Uma letra conhecida, entre o número da
+/// temporada e o `E`, não tem essa superfície.
 static SEASON_EP: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?i)\b[st](\d{1,2})[\s._-]*e[\s._-]*(\d{1,3})\b").unwrap());
+    Lazy::new(|| Regex::new(r"(?i)\b[st](\d{1,2})[\s._-]*r?[\s._-]*e[\s._-]*(\d{1,3})\b").unwrap());
 
 static SEASON_EP_X: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\b(\d{1,2})x(\d{2,3})\b").unwrap());
 
@@ -144,9 +157,9 @@ static SEASON_DIR: Lazy<Regex> = Lazy::new(|| {
     Regex::new(
         r"(?ix)
         ^(?:
-            (?:season|temporada|saison|staffel|s)\s*[._-]?\s*(\d{1,2})
+            (?:season|temp(?:orada)?|saison|staffel|s)\s*[._-]?\s*(\d{1,2})
           |
-            (\d{1,2})\s*[ªºao]?\s*[._-]?\s*(?:temporada|season|saison|staffel)
+            (\d{1,2})\s*[ªºao°]?\s*[._-]?\s*(?:temp(?:orada)?|season|saison|staffel)
         )
         (?:\s+completas?)?
         (?:\s*[\[\(][^\]\)]*[\]\)])?
@@ -155,6 +168,35 @@ static SEASON_DIR: Lazy<Regex> = Lazy::new(|| {
     )
     .unwrap()
 });
+
+
+/// `08-21 720p (Aguentando)` — temporada e episódio colados por um traço, no
+/// começo do nome. **64 arquivos de `Dr House Dublado`** neste acervo.
+///
+/// O `INDICE_NA_FRENTE` não pegava porque exige espaço depois do traço, e mesmo
+/// se pegasse leria `08` como índice absoluto — perdendo a temporada.
+///
+/// Dois dígitos de cada lado, no começo, e o que vem depois não pode ser dígito:
+/// sem isso `1080-720p` viraria temporada 10.
+static TEMP_EP_TRACO: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(\d{1,2})-(\d{1,2})(?:\D|$)").unwrap());
+
+/// `Pica-Pau.WEB.DUB-… (98).mkv` — o número absoluto entre parênteses, no fim.
+/// **196 arquivos** neste acervo, e todos ficavam sem episódio nenhum.
+///
+/// **Ano é recusado na leitura, não aqui.** `Filme (2019).mkv` casa com esta
+/// expressão, e é por isso que quem a usa confere a faixa `MIN_YEAR..=MAX_YEAR`
+/// antes de acreditar. Separar as duas coisas na própria regex exigiria repetir
+/// a definição de "ano plausível" num segundo lugar.
+static EP_ENTRE_PARENTESES: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\((\d{1,4})\)\s*$").unwrap());
+
+/// `1°Temp/12.avi` — o nome do arquivo é **só** o número. 14 arquivos de
+/// `Kenan e Kel`, com a temporada na pasta.
+///
+/// Três dígitos no máximo: com quatro, `2012.avi` viraria episódio 2012 em vez
+/// do filme que ele é.
+static SO_O_NUMERO: Lazy<Regex> = Lazy::new(|| Regex::new(r"^(\d{1,3})$").unwrap());
 
 /// Pasta de especiais → temporada 0, que é a convenção do TMDB.
 static SPECIALS_DIR: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)^(specials?|especiais?)\s*$").unwrap());
@@ -408,6 +450,37 @@ fn guess_with_hint(filename: &str, anime_hint: bool, serial: bool) -> Guess {
         }
     }
 
+    // R54 — três formas que este acervo tem e o parser não lia. As três só
+    // valem em biblioteca de série (`serial`), pela mesma razão que as de cima:
+    // num acervo de filmes elas causariam estrago.
+    //
+    // A ordem importa. `TEMP_EP_TRACO` primeiro porque é a única que traz a
+    // TEMPORADA junto — as outras duas dão um número absoluto, que o escopo
+    // depois converte.
+    if serial && guess.any_episode().is_none() && guess.season.is_none() {
+        if let Some(c) = TEMP_EP_TRACO.captures(&normalized) {
+            guess.season = c[1].parse().ok();
+            guess.episode = c[2].parse().ok();
+            drop_title = true;
+        }
+    }
+
+    if serial && guess.any_episode().is_none() {
+        let cru = normalized.trim();
+        if let Some(c) = SO_O_NUMERO.captures(cru) {
+            guess.absolute_episode = c[1].parse().ok();
+            drop_title = true;
+        } else if let Some(c) = EP_ENTRE_PARENTESES.captures(cru) {
+            // Ano entre parênteses é ano, não episódio: `Filme (2019)` casa com
+            // a mesma expressão, e é aqui que os dois se separam.
+            if let Ok(v) = c[1].parse::<i32>() {
+                if !(MIN_YEAR..=MAX_YEAR).contains(&v) {
+                    guess.absolute_episode = Some(v);
+                }
+            }
+        }
+    }
+
     // Primeiro número de 4 dígitos que (a) não abre o nome — senão "2001 A Space
     // Odyssey" perde o título — e (b) é um ano plausível — senão "Blade Runner
     // 2049" vira "Blade Runner".
@@ -491,6 +564,116 @@ fn is_informative(title: &str, serial: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    /// **R54 — os três formatos que este acervo tinha e o parser não lia.**
+    ///
+    /// Os nomes são reais, copiados do disco. Juntos eram 274 arquivos sem
+    /// número de episódio nenhum — e sem episódio o scanner não cria
+    /// `collection(série)`, então cada um virava um cartão solto na biblioteca.
+    #[test]
+    fn os_tres_formatos_do_acervo() {
+        // `serial = true`: é a chave que libera estas regras, e ela vem do
+        // `library.default_kind`. Fora de uma biblioteca de série, nenhuma vale.
+        let em_serie = |nome: &str| {
+            guess_from_path(
+                &std::path::Path::new("/tv").join(nome),
+                std::path::Path::new("/tv"),
+                true,
+            )
+        };
+
+        // Dr House: temporada e episódio colados por traço, no começo.
+        let h = em_serie("08-21 720p (Aguentando) by KiLLerBeSama.mkv");
+        assert_eq!((h.season, h.episode), (Some(8), Some(21)));
+
+        // Pica-Pau: o absoluto entre parênteses, no fim.
+        let p = em_serie("Pica-Pau.WEB.DUB-WWW.BLUDV.COM (125).mkv");
+        assert_eq!(p.absolute_episode, Some(125));
+
+        // Kenan e Kel: o nome é só o número.
+        let k = em_serie("12.avi");
+        assert_eq!(k.absolute_episode, Some(12));
+    }
+
+    /// **E o que essas três regras NÃO podem quebrar.**
+    ///
+    /// Cada uma tem um vizinho perigoso, e é ele que este teste guarda.
+    #[test]
+    fn os_tres_formatos_nao_comem_o_que_nao_e_deles() {
+        let em_serie = |nome: &str| {
+            guess_from_path(
+                &std::path::Path::new("/tv").join(nome),
+                std::path::Path::new("/tv"),
+                true,
+            )
+        };
+
+        // Ano entre parênteses é ano. Este é o vizinho do Pica-Pau, e sem o
+        // corte de faixa ele viraria episódio 2019.
+        let f = em_serie("Alguma Coisa (2019).mkv");
+        assert_eq!(f.absolute_episode, None, "ano não é episódio");
+        assert_eq!(f.year, Some(2019));
+
+        // Quatro dígitos sozinhos são ano, não episódio — o vizinho do Kenan.
+        let a = em_serie("2012.mkv");
+        assert_eq!(a.absolute_episode, None);
+
+        // Resolução com traço não é temporada — o vizinho do Dr House.
+        let r = em_serie("1080-720p alguma coisa.mkv");
+        assert_eq!(r.season, None, "1080-720p não é temporada 10");
+
+        // E nada disso vale fora de biblioteca de série.
+        let filme = guess_from_path(
+            std::path::Path::new("/media/Movies/12.mkv"),
+            std::path::Path::new("/media/Movies"),
+            false,
+        );
+        assert_eq!(filme.absolute_episode, None, "num acervo de filmes, 12 é um título");
+    }
+
+    /// A pasta `1°Temp` do `Kenan e Kel`: o `°` é SINAL DE GRAU (U+00B0), e não
+    /// o ordinal masculino `º` (U+00BA) que a expressão aceitava. Dois glifos
+    /// que se parecem, e um deles fazia a temporada sumir.
+    #[test]
+    fn temporada_com_sinal_de_grau() {
+        // Duas coisas quebravam aqui, e só uma era o glifo: "Temp" é abreviação,
+        // e a expressão só conhecia "temporada" por extenso.
+        assert!(SEASON_DIR.is_match("1°Temp"), "1°Temp é temporada 1");
+        assert!(SEASON_DIR.is_match("2ª Temporada"), "e o ordinal continua valendo");
+        assert!(SEASON_DIR.is_match("Temporada 3"), "e a forma por extenso também");
+        assert!(!SEASON_DIR.is_match("Tempos Modernos"), "mas 'Tempos' não é temporada");
+    }
+
+    /// **R54 — o caso do `Arrested Development`, e o falso positivo que ele quase
+    /// trouxe junto.**
+    ///
+    /// `S04RE01` é a temporada 4 **Remix**. O `R` no meio quebrava a expressão, e
+    /// 22 arquivos ficavam sem episódio — o que os impedia de virar uma série na
+    /// biblioteca, porque sem episódio não nasce `collection`.
+    ///
+    /// A segunda metade do teste é o motivo de o remendo ser `r?` e não
+    /// `[a-z]{0,2}`: com duas letras livres, `S02 The 100` viraria temporada 2,
+    /// episódio 100. "The 100" é uma série de verdade.
+    #[test]
+    fn remix_casa_e_the_100_nao() {
+        let g = guess_from_filename(
+            "Arrested Development (2003) - S04RE01 - Re Cap'n Bluth (1080p NF WEB-DL x265).mkv",
+        );
+        assert_eq!(g.season, Some(4), "a temporada do remix");
+        assert_eq!(g.episode, Some(1), "o episódio do remix");
+
+        // E o formato normal não mudou.
+        let n = guess_from_filename("Breaking Bad - S02E07 - Negro y Azul.mkv");
+        assert_eq!((n.season, n.episode), (Some(2), Some(7)));
+
+        // O falso positivo que a versão genérica criaria.
+        let t = guess_from_filename("S02 The 100 1080p.mkv");
+        assert_ne!(
+            t.episode,
+            Some(100),
+            "duas letras livres fariam 'The 100' virar episódio 100"
+        );
+    }
     use super::*;
     use std::path::PathBuf;
 

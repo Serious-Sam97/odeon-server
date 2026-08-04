@@ -8102,3 +8102,109 @@ seção está no `odeon-server`, porque foi ali que o `DESIGN.md` inteiro ficou
 É a primeira vez que uma fase precisa de dois commits em dois repositórios pra
 existir, e é exatamente o atrito que a separação comprou. Vale a pena continuar
 observando: se virar rotina, o documento é que está no lugar errado.
+
+---
+
+## 70. R54 — 22 cartões iguais, e a regra que faltava num lugar só
+
+> *"Pq arrested development nao esta junto como outras series? Aproveitando que
+> achei isso, tente achar o pq do erro para nao acontecer novamente"*
+
+### O caso, e por que ele era invisível
+
+Os arquivos são a temporada 4 **Remix**:
+
+```
+Arrested Development (2003) - S04RE01 - Re Cap'n Bluth …mkv
+                                  ↑ o R de Remix
+```
+
+A expressão `SEASON_EP` é `S(\d)` mais separadores mais `E(\d)`. O `R` não é
+separador, então **nenhum dos 22 arquivos tinha temporada nem episódio** — e sem
+episódio o scanner não cria `collection(série)` → `collection(temporada)`, que é
+exatamente por onde a biblioteca agrupa. Sem coleção, cada arquivo é um cartão.
+
+### A pergunta melhor era a segunda, e o dado respondeu
+
+**2.121 arquivos** eram `kind=episode` sem número de episódio. Desses o sistema
+marcou 2.029 (`unmatched`, `needs_review`, `ignored`) — **92 passaram calados**
+como `confirmed`, e os 22 do Arrested Development estavam entre eles.
+
+Todos os 92 com `match_reasons = []`, vazio. Todo caminho legítimo grava a razão,
+e foi esse vazio que apontou o culpado.
+
+### A regra estava escrita três vezes e aplicada em três dos quatro lugares
+
+| caminho | guardava? |
+|---|---|
+| `scopes::identify` — a pasta inteira | sim |
+| a regra de escopo, no scanner | sim |
+| `propagar` — os **irmãos** do arquivo clicado | sim, com comentário explicando |
+| **`confirm` — a obra em que se clicou** | **não** |
+
+Faltava exatamente onde a decisão humana entra. Os vizinhos eram protegidos; o
+arquivo clicado, não. Agora ele recebe a identidade da série e fica na fila com o
+motivo — que é mais do que tinha antes, porque agora se sabe QUAL é a série.
+
+### Quatro buracos de parser, e o que cada remendo NÃO pode comer
+
+| formato | arquivos | remendo | o vizinho perigoso |
+|---|---|---|---|
+| `S04RE01` (Remix) | 22 | um `r?` opcional | `[a-z]{0,2}` faria `S02 The 100` virar episódio 100 — e *The 100* existe |
+| `08-21 720p (…)` (Dr House) | 64 | `^(\d{1,2})-(\d{1,2})\D` | sem o `\D`, `1080-720p` viraria temporada 10 |
+| `… (125).mkv` (Pica-Pau) | 196 | `\((\d{1,4})\)\s*$` | ano entre parênteses: recusado pela faixa `MIN_YEAR..=MAX_YEAR` |
+| `1°Temp/12.avi` (Kenan e Kel) | 14 | nome que é só número, ≤3 dígitos | com 4, `2012.avi` viraria episódio 2012 |
+
+Os quatro só valem com `serial` — a chave que o próprio `guess.rs` criou pras
+regras que num acervo de filmes causariam estrago.
+
+**E o `1°Temp` tinha dois defeitos, não um.** O `°` é SINAL DE GRAU (U+00B0) e a
+expressão aceitava o ordinal `º` (U+00BA) — dois glifos parecidos. Mas o que
+realmente derrubava era `Temp`: a expressão só conhecia `temporada` por extenso.
+
+### O resultado, medido
+
+| | antes | depois |
+|---|---|---|
+| episódios sem número, no acervo | 2.121 | **1.823** |
+| cartões de `Arrested Development` | 22 | **8** |
+
+**298 arquivos ganharam número.** E o Arrested Development virou uma série de
+5 temporadas e 84 episódios — mais 7 cartões soltos, que é o assunto seguinte.
+
+### A contradição que sobrou, e ela é uma pergunta de produto
+
+A temporada 4 do TMDB tem **15** episódios; o Remix tem **22**. Os sete
+excedentes ficaram em `needs_review` com a razão gravada — o que é a filosofia
+funcionando — e **fora de qualquer coleção**, o que os deixa como sete cartões
+soltos: o mesmo sintoma, em menor escala.
+
+E aí duas linhas da **mesma função** se contradizem:
+
+> o cabeçalho: *"quando não resolve, ele recebe a identidade da série, **entra na
+> coleção** e fica em `needs_review`"*
+>
+> o código, 250 linhas abaixo: *"NÃO resolveu o episódio: **não escreve metadado
+> nenhum**… gravar a identidade da série seria escrever sob incerteza"*
+
+O código segue o segundo. Qual dos dois está certo **não é uma decisão técnica**:
+
+- entrar na coleção **não** é afirmar qual episódio o arquivo é — é afirmar de
+  que série ele é, que foi justamente o que a pessoa acabou de dizer ao
+  identificar a pasta;
+- e não entrar é o que produz o cartão solto, que foi o defeito relatado.
+
+Fica registrado sem conserto: mexer nisso muda o que "escrever sob incerteza"
+significa no projeto inteiro, e essa definição é de quem decide.
+
+### O que NÃO está fechado
+
+**Os `Featurettes` continuam contando como episódio.** `Gag Reel`, `Deleted
+Scenes`, `Disc 3` — cerca de 90 arquivos que não são episódios de nada. Tirá-los
+do acervo é apagar da biblioteca de três pessoas, e não foi pedido.
+
+**Sobram 1.823 episódios sem número**, em outros formatos. A classe encolheu 14%
+com quatro remendos; o resto pede a mesma medição, formato a formato.
+
+**257 testes** (quatro novos, todos com nomes de arquivo copiados do disco — e
+cada um cobrando também o vizinho que o remendo não pode comer).

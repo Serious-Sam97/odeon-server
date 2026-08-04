@@ -409,18 +409,55 @@ pub async fn confirm(
 
     let (work, guess) = metadata::load_work_context(&state.pool, work_id).await?;
 
-    metadata::apply_candidate(
-        &state.pool,
-        &state.providers,
-        &state.config.artwork_dir,
-        &work,
-        &guess,
-        &candidate,
-        row.id,
-        1.0,
-        "confirmed",
-    )
-    .await?;
+    // R54 — O MESMO GUARDA QUE OS IRMÃOS SEMPRE TIVERAM.
+    //
+    // A regra do §M1 — *"nunca inventar; se não dá pra saber, o campo fica None
+    // e a obra cai na fila"* — estava escrita três vezes e aplicada em três dos
+    // quatro caminhos que confirmam alguma coisa:
+    //
+    // | caminho | guardava? |
+    // |---|---|
+    // | `scopes::identify` (a pasta inteira) | sim |
+    // | a regra de escopo, no `metadata/mod.rs` | sim |
+    // | `propagar` (os irmãos deste clique) | sim, com comentário explicando |
+    // | **este aqui — a obra em que se clicou** | **não** |
+    //
+    // Faltava justamente onde a decisão humana entra. E o sintoma foi silencioso
+    // do pior jeito: 22 arquivos de `Arrested Development` viraram 22 obras
+    // `confirmed` **sem número de episódio** — e sem episódio o scanner não cria
+    // `collection(série)`, então a biblioteca mostrou 22 cartões idênticos em vez
+    // de uma série. Nada errou em voz alta.
+    //
+    // Um arquivo cujo nome não diz o episódio recebe a **identidade da série** e
+    // fica na fila com o motivo. É mais do que ele tinha antes: agora se sabe
+    // QUAL é a série, e a revisão vira uma pergunta só ("qual episódio?") em vez
+    // de duas.
+    if guess.any_episode().is_none() && candidate.provider_kind != "movie" {
+        sqlx::query(
+            "UPDATE work SET match_state = 'needs_review', match_reasons = $2, updated_at = now()
+             WHERE id = $1",
+        )
+        .bind(work_id)
+        .bind(json!([
+            format!("a série é {} (confirmada por você)", candidate.title),
+            "mas o número do episódio não está neste arquivo".to_string(),
+        ]))
+        .execute(&state.pool)
+        .await?;
+    } else {
+        metadata::apply_candidate(
+            &state.pool,
+            &state.providers,
+            &state.config.artwork_dir,
+            &work,
+            &guess,
+            &candidate,
+            row.id,
+            1.0,
+            "confirmed",
+        )
+        .await?;
+    }
 
     // Os irmãos recebem a MESMA série, mas cada um resolve o próprio episódio:
     // é o número dele que diz qual episódio é, não o do vizinho.
