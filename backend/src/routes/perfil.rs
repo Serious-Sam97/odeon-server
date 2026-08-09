@@ -372,6 +372,14 @@ pub struct NovoPerfil {
     pub capa: Option<String>,
     #[serde(default)]
     pub moldura: Option<String>,
+    /// O nome que aparece em toda tela. **`None` é "não mexe"**, e não "apaga":
+    /// ele mora no `app_user` e não no `perfil`, então quem não mandar o campo —
+    /// um cliente antigo, o app — continua salvando o resto sem se renomear por
+    /// omissão. É o contrário da regra do `avatar` logo acima, e de propósito:
+    /// lá o vazio é uma escolha ("não quero rosto"), aqui não existe conta sem
+    /// nome.
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 /// Salvar o próprio perfil.
@@ -438,6 +446,12 @@ pub async fn salvar(
 
     let vazio_e_nada = |v: &Option<String>| v.as_deref().map(str::trim).filter(|x| !x.is_empty()).map(str::to_string);
 
+    // O nome mora em OUTRA tabela, e por isso daqui pra baixo é transação: o
+    // perfil e o `app_user` mudam juntos ou não mudam. Salvar o nome e perder a
+    // vitrine — ou o contrário — deixaria a tela mostrando metade do que a
+    // pessoa mandou, e ela não teria como saber qual metade.
+    let mut tx = state.pool.begin().await?;
+
     let feito = sqlx::query(
         "INSERT INTO perfil (user_id, titulo, tags, bio, vitrine, avatar, capa, moldura, atualizado_em)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now())
@@ -456,19 +470,55 @@ pub async fn salvar(
     .bind(vazio_e_nada(&novo.avatar))
     .bind(vazio_e_nada(&novo.capa))
     .bind(vazio_e_nada(&novo.moldura))
-    .execute(&state.pool)
+    .execute(&mut *tx)
     .await;
 
     if let Err(e) = feito {
-        if matches!(&e, sqlx::Error::Database(db) if db.code().as_deref() == Some("23514")) {
-            return Err(AppError::BadRequest(
-                "no máximo 5 tags, 6 caixas na vitrine e 140 caracteres na bio".into(),
-            ));
-        }
-        return Err(e.into());
+        return Err(violacao(e));
     }
 
+    // O nome, quando veio. Vazio depois do `trim` é recusado em vez de virar
+    // "não mexe": quem apagou o campo e mandou salvar pediu alguma coisa, e o
+    // silêncio devolveria a tela com o nome velho sem dizer por quê (§8b).
+    if let Some(bruto) = novo.display_name.as_deref() {
+        let nome = bruto.trim();
+        if nome.is_empty() {
+            return Err(AppError::BadRequest("o nome não pode ficar vazio".into()));
+        }
+        let feito = sqlx::query("UPDATE app_user SET display_name = $2 WHERE id = $1")
+            .bind(user.id)
+            .bind(nome)
+            .execute(&mut *tx)
+            .await;
+        if let Err(e) = feito {
+            return Err(violacao(e));
+        }
+    }
+
+    tx.commit().await?;
+
     Ok(Json(json!({ "ok": true })))
+}
+
+/// Traduz um `CHECK` violado pra 400, com a frase do campo certo.
+///
+/// Antes havia uma frase só, e ela listava tags, vitrine e bio. Com o nome
+/// entrando pela 0038 essa frase passaria a mentir em um dos casos — quem
+/// estourasse o nome leria sobre a bio. O `constraint()` diz qual trava caiu, e
+/// é ele que escolhe a frase.
+fn violacao(e: sqlx::Error) -> AppError {
+    if let sqlx::Error::Database(db) = &e {
+        if db.code().as_deref() == Some("23514") {
+            return AppError::BadRequest(
+                match db.constraint() {
+                    Some("app_user_display_name_check") => "o nome precisa ter de 1 a 40 caracteres",
+                    _ => "no máximo 5 tags, 6 caixas na vitrine e 140 caracteres na bio",
+                }
+                .into(),
+            );
+        }
+    }
+    e.into()
 }
 
 #[cfg(test)]

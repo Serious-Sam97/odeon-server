@@ -390,6 +390,15 @@ pub async fn revoke_one(
 pub struct MudaUsuario {
     pub role: Option<String>,
     pub is_active: Option<bool>,
+    /// Renomear outra pessoa. Existe pra conta que nasceu com nome errado — o
+    /// admin digita o nome no `create_user` e no convite, então o erro é dele e
+    /// era ele quem não tinha como consertar.
+    ///
+    /// **Só o `display_name`.** O `username` é a identidade de entrada e o
+    /// endereço `/p/<nome>` que o próprio perfil distribui; trocá-lo por fora
+    /// quebraria os links de alguém sem essa pessoa saber.
+    #[serde(default)]
+    pub display_name: Option<String>,
 }
 
 /// Muda papel e estado de um usuário.
@@ -430,15 +439,34 @@ pub async fn update_user(
         ));
     }
 
+    // Vazio depois do `trim` é recusado, e não tratado como "não mexe": o
+    // `COALESCE` abaixo já cobre quem não mandou o campo, então um campo mandado
+    // em branco é um pedido — e o pedido é impossível.
+    let nome = match body.display_name.as_deref().map(str::trim) {
+        Some("") => return Err(AppError::BadRequest("o nome não pode ficar vazio".into())),
+        outro => outro,
+    };
+
     let r = sqlx::query(
-        "UPDATE app_user SET role = COALESCE($2, role), is_active = COALESCE($3, is_active)
+        "UPDATE app_user SET role = COALESCE($2, role), is_active = COALESCE($3, is_active),
+                             display_name = COALESCE($4, display_name)
          WHERE id = $1",
     )
     .bind(user_id)
     .bind(&body.role)
     .bind(body.is_active)
+    .bind(nome)
     .execute(&state.pool)
-    .await?;
+    .await
+    .map_err(|e| match &e {
+        // O limite é o `CHECK` da 0038. Aqui ele só vira 400 em vez de 500.
+        sqlx::Error::Database(db)
+            if db.constraint() == Some("app_user_display_name_check") =>
+        {
+            AppError::BadRequest("o nome precisa ter de 1 a 40 caracteres".into())
+        }
+        _ => AppError::Db(e),
+    })?;
     if r.rows_affected() == 0 {
         return Err(AppError::NotFound);
     }
