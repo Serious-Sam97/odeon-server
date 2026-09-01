@@ -165,6 +165,29 @@ const OBRAS_DA_CAIXA: &str = r#"
     WHERE c.id = $ALVO OR c.parent_id = $ALVO
 "#;
 
+/// A chave da caixa, a partir de `$2` (obra) e `$3` (coleção) — **R60**.
+///
+/// A caixa é o **filme**, não o rip. *007: A Serviço Secreto de Sua Majestade*
+/// existe duas vezes no acervo, e são 44 filmes assim: a biblioteca já os
+/// desenha como um cartão desde a R47, mas a locadora trancava por `work_id`.
+/// O resultado era um 403 que o cliente não tinha como prever — a prateleira
+/// dizia o id do rip que estava fora, e o cartão conhecia o do outro — e uma
+/// escassez que não escasseava: duas pessoas podiam levar "o mesmo filme".
+///
+/// É a mesma identificação que agrupa versões na biblioteca e que o guia conta
+/// desde a R59. Ver `migrations/0043` pro porquê de ela ser gravada na linha.
+///
+/// Vive numa `const` porque é usada em dois lugares do `alugar` — a inserção e
+/// a pergunta "quem está com ela" — e as duas **têm** de concordar: se
+/// divergirem, o índice recusa por um motivo e a resposta explica outro.
+const CAIXA_CHAVE: &str = r#"
+    COALESCE(
+        (SELECT CASE WHEN w.kind = 'movie' THEN w.external_ids->>'tmdb' END
+           FROM work w WHERE w.id = $2),
+        $2::text,
+        $3::text)
+"#;
+
 /// As opções da loja.
 ///
 /// Moravam no `circulo` até a R28, e não voltaram pro código quando ele caiu: o
@@ -236,6 +259,24 @@ pub struct Emprestada {
     /// O id da caixa — obra avulsa ou coleção. É o mesmo id que
     /// `/api/library` devolve, e é por ele que a tela casa com a estante.
     pub caixa_id: Uuid,
+    /// **Todos** os ids que abrem esta caixa (R60).
+    ///
+    /// Quase sempre é `[caixa_id]`. Nos 44 filmes que existem em dois rips ele
+    /// traz os dois — e é por isso que ele existe: o `caixa_id` é o rip que
+    /// está fora, e o cartão da biblioteca conhece o **representante do
+    /// grupo**, que pode ser o outro. Foi essa diferença que fez «pegar a
+    /// fita» devolver 403 sem o app ter como prever, medido em 04/08/2026 em
+    /// *007: A Serviço Secreto de Sua Majestade*.
+    ///
+    /// Com este campo a previsão vira uma pergunta que o cliente já sabe
+    /// fazer: *o id que eu ia mandar está em algum `caixa_ids`?* Se está, o
+    /// botão não se oferece — e `meu` diz se a frase é "esta já está com você"
+    /// ou "fulano está com esta".
+    ///
+    /// Sai daqui, e não de um campo novo na ficha, porque a prateleira é a
+    /// única resposta que já lista *o que está fora*. Um booleano na ficha
+    /// obrigaria a recarregá-la a cada devolução.
+    pub caixa_ids: Vec<Uuid>,
     pub serie: bool,
     pub titulo: String,
     pub quem: Uuid,
@@ -536,6 +577,18 @@ pub async fn prateleira(
     let emprestadas = sqlx::query_as::<_, Emprestada>(
         "SELECT e.id,
                 COALESCE(e.work_id, e.collection_id)   AS caixa_id,
+                -- R60: os irmãos do mesmo filme. `array_agg` sobre a chave
+                -- gravada na linha, e não sobre o `tmdb` de agora: se um
+                -- rematch mudar a identificação no meio do prazo, a caixa
+                -- continua sendo a que foi emprestada.
+                COALESCE(
+                    (SELECT array_agg(w2.id)
+                       FROM work w2
+                      WHERE w2.kind = 'movie'
+                        AND w2.match_state <> 'ignored'
+                        AND w2.external_ids->>'tmdb' = e.caixa_chave),
+                    ARRAY[COALESCE(e.work_id, e.collection_id)]
+                )                                      AS caixa_ids,
                 e.collection_id IS NOT NULL            AS serie,
                 COALESCE(w.title, c.title)             AS titulo,
                 e.user_id                              AS quem,
@@ -761,7 +814,7 @@ pub async fn estantes(
                 FROM collection_item ci
                 JOIN collection season ON season.id = ci.collection_id
                 LEFT JOIN collection series ON series.id = season.parent_id
-                WHERE ci.work_id = w.id AND season.kind IN ('season', 'series')
+                WHERE ci.work_id = w.id AND season.kind IN ('season', 'series', 'channel')
                 LIMIT 1
             ) g ON true
             LEFT JOIN LATERAL (
@@ -943,11 +996,17 @@ pub async fn alugar(
     // `if` que decide pular a inserção: o empréstimo nasce carregando o regime,
     // e quem recusa continua sendo o índice único parcial da 0029. A regra
     // permanece do banco, que é o que o §35 comprou e o §5 defende.
+    // **A caixa é o filme, não o rip** (R60). A chave sai do banco na hora da
+    // inserção — não do cliente, que manda o id de um dos rips e não sabe do
+    // outro. Ver `migrations/0043`.
     let inserido = sqlx::query_as::<_, (i64,)>(
-        "INSERT INTO emprestimo (user_id, work_id, collection_id, vence_em, exclusivo)
-         VALUES ($1, $2, $3, now() + ($4 || ' days')::interval, $5)
-         ON CONFLICT DO NOTHING
-         RETURNING id",
+        &format!(
+            "INSERT INTO emprestimo
+                 (user_id, work_id, collection_id, vence_em, exclusivo, caixa_chave)
+             SELECT $1, $2, $3, now() + ($4 || ' days')::interval, $5, {CAIXA_CHAVE}
+             ON CONFLICT DO NOTHING
+             RETURNING id"
+        ),
     )
     .bind(user.id)
     .bind(alvo.work_id)
@@ -968,14 +1027,19 @@ pub async fn alugar(
         // desligada, o único índice que ainda recusa é o de uma caixa por
         // pessoa — e aí quem está com ela é você. Dizer "fulano está com esta"
         // nesse caso mandaria pedir de volta a própria fita.
+        // R60: procura pela **chave**, e não pelo id do rip. Era aqui que a
+        // resposta virava "não foi possível pegar esta caixa" — a mensagem que
+        // o próprio código marcava como "não deveria acontecer".
         let com_quem: Option<(String, bool)> = sqlx::query_as(
-            "SELECT u.display_name, e.user_id = $1 AS meu
-             FROM emprestimo e
-             JOIN app_user u ON u.id = e.user_id
-             WHERE e.devolvido_em IS NULL
-               AND (e.work_id = $2 OR e.collection_id = $3)
-             ORDER BY meu DESC
-             LIMIT 1",
+            &format!(
+                "SELECT u.display_name, e.user_id = $1 AS meu
+                 FROM emprestimo e
+                 JOIN app_user u ON u.id = e.user_id
+                 WHERE e.devolvido_em IS NULL
+                   AND e.caixa_chave = ({CAIXA_CHAVE})
+                 ORDER BY meu DESC
+                 LIMIT 1"
+            ),
         )
         .bind(user.id)
         .bind(alvo.work_id)
@@ -1400,6 +1464,34 @@ mod tests {
         assert!(so_colecao.validar().is_ok());
         assert!(nenhum.validar().is_err());
         assert!(ambos.validar().is_err());
+    }
+
+    /// **R60.** A chave da caixa lê a obra por `$2` e a coleção por `$3` — a
+    /// mesma ordem de bind das duas consultas do `alugar`. Trocar a ordem faria
+    /// o índice recusar por um motivo e a resposta explicar outro.
+    #[test]
+    fn a_chave_da_caixa_usa_a_ordem_de_bind_do_alugar() {
+        assert!(CAIXA_CHAVE.contains("w.id = $2"));
+        assert!(CAIXA_CHAVE.contains("$2::text"));
+        assert!(CAIXA_CHAVE.contains("$3::text"));
+        // Nenhum outro marcador: `$1` é o usuário nas duas, e ele não entra na
+        // identidade da caixa — a caixa é a mesma pra todo mundo.
+        assert!(!CAIXA_CHAVE.contains("$1"));
+    }
+
+    /// A chave é a **identificação**, e só em filme.
+    ///
+    /// Em série ela não pode ser o `tmdb`: os episódios de uma série
+    /// compartilham o da série, e agrupar por ele juntaria a temporada inteira
+    /// numa caixa só — a mesma armadilha que a R47 evitou na biblioteca.
+    #[test]
+    fn a_chave_so_agrupa_filme() {
+        assert!(CAIXA_CHAVE.contains("w.kind = 'movie'"));
+        assert!(CAIXA_CHAVE.contains("external_ids->>'tmdb'"));
+        // Sem identificação, cada obra é a própria caixa: o `COALESCE` cai no
+        // id. Dois `unmatched` não viram a mesma fita por semelhança.
+        let depois_do_tmdb = CAIXA_CHAVE.split("tmdb").nth(1).unwrap();
+        assert!(depois_do_tmdb.contains("$2::text"));
     }
 
     /// A classificação tem que citar o mesmo 0.92 do §8f. Um literal solto aqui

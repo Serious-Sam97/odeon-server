@@ -1,7 +1,12 @@
 pub mod anilist;
+pub mod estrutura;
+pub mod formato;
+pub mod genero;
+pub mod pasta;
 pub mod producao;
 pub mod regiao;
 pub mod saga;
+pub mod temporada;
 pub mod score;
 pub mod tmdb;
 
@@ -128,6 +133,36 @@ pub async fn run_matching(
     force: bool,
     job: Option<crate::jobs::Job>,
 ) -> bool {
+    let alvo = if force { "tudo" } else { "novas" };
+    run_matching_kind(pool, providers, artwork_dir, status, alvo, job, None).await
+}
+
+/// `novas` | `pendentes` | `tudo` — qualquer outra coisa é `novas`, que é o
+/// alvo mais estreito. Um parâmetro torto não pode alargar o estrago.
+pub fn alvo_valido(pedido: Option<&str>) -> &'static str {
+    match pedido.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("tudo") | Some("all") => "tudo",
+        Some("pendentes") | Some("pending") => "pendentes",
+        _ => "novas",
+    }
+}
+
+/// A identificação, opcionalmente limitada a um `default_kind` — R73.
+///
+/// Existe pra que "buscar os filmes" identifique **filmes**, e não a série
+/// que estava na fila por acaso. Sem o corte, o escopo do gesto seria uma
+/// mentira pela metade: a varredura respeitaria o pedido e a identificação
+/// não.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_matching_kind(
+    pool: PgPool,
+    providers: Providers,
+    artwork_dir: PathBuf,
+    status: SharedMatchStatus,
+    alvo: &str,
+    job: Option<crate::jobs::Job>,
+    apenas: Option<&str>,
+) -> bool {
     {
         let mut s = status.lock().await;
         if s.running {
@@ -150,12 +185,19 @@ pub async fn run_matching(
         JOIN media_file m ON m.work_id = w.id AND m.status = 'probed'
         JOIN library l ON l.id = m.library_id
         WHERE l.provider_hint <> 'none'
+          -- ⚠️ A linha que não muda nunca: decisão humana não é refeita.
           AND w.match_state NOT IN ('confirmed', 'ignored')
-          AND ($1 OR w.match_state = 'unmatched')
+          -- R74: `novas` só o que nunca casou, `pendentes` inclui a revisão,
+          -- `tudo` inclui também o que já está `auto`.
+          AND ($1 = 'tudo'
+               OR ($1 = 'pendentes' AND w.match_state IN ('unmatched', 'needs_review'))
+               OR w.match_state = 'unmatched')
+          AND ($2::text IS NULL OR l.default_kind = $2)
         ORDER BY w.id, m.size_bytes DESC
         "#,
     )
-    .bind(force)
+    .bind(alvo)
+    .bind(apenas)
     .fetch_all(&pool)
     .await
     {
@@ -190,7 +232,7 @@ pub async fn run_matching(
     tracing::info!(
         total,
         escopos = escopos.len(),
-        force,
+        alvo,
         "identificação iniciada"
     );
 
@@ -494,6 +536,10 @@ async fn match_one(
     scored.sort_by(|a, b| b.1.value.total_cmp(&a.1.value));
     scored.truncate(8);
 
+    // R72 — o desempate por número de temporadas.
+    desempatar_por_temporada(providers, guess, &mut scored).await;
+    scored.sort_by(|a, b| b.1.value.total_cmp(&a.1.value));
+
     // Toda tentativa fica gravada, mesmo a que perdeu. É o que permite auditar
     // depois "por que ele achou que era isso?".
     let mut candidate_ids = Vec::new();
@@ -546,6 +592,107 @@ async fn match_one(
     }
 
     Ok(state)
+}
+
+/// Quão perto dois candidatos precisam estar pra valer perguntar ao provider.
+///
+/// Acima disso o primeiro já ganhou por evidência de verdade, e a chamada extra
+/// não mudaria nada.
+const MARGEM_DE_EMPATE: f32 = 0.05;
+
+/// O que "esta série chega até a temporada N" vale, pros dois lados.
+///
+/// Assimétrico de propósito: **caber é fraco, não caber é forte.** Uma série
+/// com vinte temporadas comporta a 14 sem que isso prove que é ela; uma série
+/// com quatro **não pode** ter um episódio da 14 — isso não é "menos provável",
+/// é impossível.
+const CABE: f32 = 0.05;
+const NAO_CABE: f32 = 0.10;
+
+/// **R72 — duas séries homônimas, e o desempate está no número de temporadas.**
+///
+/// ## O caso
+///
+/// 485 arquivos de *A Grande Família* na fila de revisão, os 485 com o mesmo
+/// par de candidatos e o mesmo empate:
+///
+/// ```text
+/// 1º  A Grande Família (2001)  0,7922   título idêntico · sem ano pra comparar
+///                                       · parece episódio · popular no provider
+/// 2º  A Grande Família (1972)  0,7800   os três primeiros, sem o último
+/// ```
+///
+/// São duas séries homônimas de verdade. A **única** coisa que as separava era
+/// popularidade — que é sobre o mundo, não sobre estes arquivos. 0,0122 não
+/// confirma nada, então os 485 iam pra revisão humana com dois candidatos
+/// colados.
+///
+/// E o sinal que decide estava no nome dos arquivos o tempo todo: juntos eles
+/// cobrem **temporadas 1 a 14**. A série de 2001 tem catorze; a de 1972, não.
+///
+/// ## Por que ele não confirma sozinho
+///
+/// `CABE` é 0,05 — o suficiente pra tirar o empate e **não** pra levar 0,79 até
+/// o limiar de 0,85. Foi o que o cliente pediu com todas as letras: *"se o
+/// desempate só empurrar o score pra cima sem passar do limiar, já terá
+/// valido — a fila humana continua, mas com um candidato claramente à frente
+/// em vez de dois colados"*.
+///
+/// ## O que ele custa
+///
+/// Uma chamada `/tv/{id}` por candidato, **só quando há empate** e só uma vez
+/// por série no processo inteiro (o `maior_temporada` guarda). Nos 485
+/// arquivos do caso, são duas chamadas ao todo.
+///
+/// ⚠️ **Só com temporada declarada.** Anime numerado em absoluto não tem
+/// `season`, e inventar uma pra comparar seria o §18 ao contrário. Sem ela, a
+/// função não faz nada.
+async fn desempatar_por_temporada(
+    providers: &Providers,
+    guess: &Guess,
+    scored: &mut [(Candidate, score::Score)],
+) {
+    let Some(temporada) = guess.season else { return };
+    let Some(tmdb) = &providers.tmdb else { return };
+    if scored.len() < 2 {
+        return;
+    }
+
+    // Só empate, e só entre seriados do TMDB: comparar temporada de um filme
+    // não quer dizer nada.
+    let empatados = scored[0].1.value - scored[1].1.value < MARGEM_DE_EMPATE;
+    let dois_seriados = scored[..2]
+        .iter()
+        .all(|(c, _)| c.provider == "tmdb" && c.provider_kind != "movie");
+    if !empatados || !dois_seriados {
+        return;
+    }
+
+    for (candidato, pontuacao) in scored[..2].iter_mut() {
+        let Some(maior) = tmdb.maior_temporada(&candidato.provider_id).await else {
+            continue;
+        };
+        let (ajuste, motivo) = ajuste_por_temporada(maior, temporada);
+        pontuacao.value = (pontuacao.value + ajuste).clamp(0.0, 1.0);
+        pontuacao.reasons.push(motivo);
+    }
+}
+
+/// O peso e a frase, separados da chamada de rede pra poderem ser testados.
+fn ajuste_por_temporada(maior: i32, temporada: i32) -> (f32, String) {
+    if maior >= temporada {
+        (
+            CABE,
+            format!("tem {maior} temporadas, e este arquivo é da {temporada}ª"),
+        )
+    } else {
+        (
+            -NAO_CABE,
+            format!(
+                "o provider diz que esta série tem {maior} temporadas, e este arquivo é da {temporada}ª"
+            ),
+        )
+    }
 }
 
 /// Acha o episódio dentro de uma temporada já carregada.
@@ -809,6 +956,11 @@ pub async fn apply_candidate(
         .execute(pool)
         .await?;
 
+        // R75 — a coleção de estrutura **cede a vez**. A obra acabou de ganhar
+        // um lugar de verdade; deixá-la também pendurada na pasta faria a
+        // biblioteca escolher entre as duas por sorte (`LIMIT 1` no `grupo`).
+        estrutura::soltar_da_estrutura(pool, work.id).await;
+
         // O TMDB tem detalhe por episódio; o AniList não, então lá fica o número.
         //
         // Busca a TEMPORADA e acha o episódio dentro dela, em vez de pedir
@@ -923,7 +1075,10 @@ pub async fn apply_candidate(
         Err(e) => tracing::warn!(error = %e, "créditos não vieram do provider"),
     }
 
-    attach_tag(pool, work.id, "format", format_tag).await?;
+    // R64: **substitui**, não acrescenta. O scanner já escreveu `série` ou
+    // `filme` a partir do `kind`; sem a troca, um episódio de anime ficaria com
+    // os dois e apareceria em duas prateleiras.
+    formato::gravar(pool, work.id, format_tag).await?;
 
     // Gêneros do provider viram tags no namespace `genre`. É isso que dá massa
     // crítica pra taxonomia — sem eles o sistema de tags nasce vazio.
@@ -1338,6 +1493,96 @@ pub fn apply_parse_override(guess: &mut Guess, o: &serde_json::Value) {
 }
 
 #[cfg(test)]
+mod tests_alvo {
+    use super::*;
+
+    /// **R74 — o meio que faltava.** `force` só tinha dois extremos, e uma
+    /// melhoria de parser ou de score precisa exatamente do meio.
+    #[test]
+    fn os_tres_alvos() {
+        assert_eq!(alvo_valido(Some("novas")), "novas");
+        assert_eq!(alvo_valido(Some("pendentes")), "pendentes");
+        assert_eq!(alvo_valido(Some("tudo")), "tudo");
+    }
+
+    /// ⚠️ **Alvo torto não alarga o estrago.** Um erro de digitação cai no
+    /// alvo mais estreito, e não no que refaz o acervo inteiro.
+    #[test]
+    fn alvo_desconhecido_cai_no_mais_estreito() {
+        assert_eq!(alvo_valido(None), "novas");
+        assert_eq!(alvo_valido(Some("")), "novas");
+        assert_eq!(alvo_valido(Some("pendente")), "novas");
+        assert_eq!(alvo_valido(Some("TUDOO")), "novas");
+    }
+
+    /// A regra que nenhum alvo quebra: decisão humana não é refeita.
+    #[test]
+    fn nenhum_alvo_alcanca_o_confirmado_nem_o_ignorado() {
+        let fonte = include_str!("mod.rs");
+        assert!(
+            fonte.contains("w.match_state NOT IN ('confirmed', 'ignored')"),
+            "a guarda das decisões humanas saiu da consulta de identificação"
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_temporada {
+    use super::*;
+
+    /// **R72 — o caso real.** *A Grande Família* (2001) contra (1972), com o
+    /// arquivo declarando a 14ª temporada. Antes, 0,7922 × 0,7800 — 0,0122 de
+    /// diferença, e ela vinha de popularidade.
+    #[test]
+    fn o_desempate_separa_as_duas_homonimas() {
+        let (ajuste_2001, _) = ajuste_por_temporada(14, 14);
+        let (ajuste_1972, _) = ajuste_por_temporada(1, 14);
+
+        let de_2001 = 0.7922 + ajuste_2001;
+        let de_1972 = 0.7800 + ajuste_1972;
+
+        assert!(de_2001 > de_1972);
+        assert!(
+            de_2001 - de_1972 > 0.10,
+            "a diferença ficou em {}, e 0,0122 era o problema",
+            de_2001 - de_1972
+        );
+    }
+
+    /// ⚠️ **Ele não confirma sozinho, e isso foi pedido.** O candidato certo
+    /// tem de subir sem cruzar o limiar de auto-identificação — a fila humana
+    /// continua, com um candidato claramente à frente.
+    #[test]
+    fn o_desempate_nao_leva_ninguem_ao_limiar() {
+        let (ajuste, _) = ajuste_por_temporada(14, 14);
+        assert!(
+            0.7922 + ajuste < score::AUTO_THRESHOLD,
+            "o desempate sozinho passou de {}",
+            score::AUTO_THRESHOLD
+        );
+    }
+
+    /// **Caber é fraco; não caber é forte.** Uma série de vinte temporadas
+    /// comporta a 14 sem provar nada; uma de quatro **não pode** ter um
+    /// episódio da 14 — não é menos provável, é impossível.
+    #[test]
+    fn nao_caber_pesa_mais_que_caber() {
+        let (cabe, _) = ajuste_por_temporada(20, 14);
+        let (nao_cabe, _) = ajuste_por_temporada(4, 14);
+        assert!(cabe > 0.0 && nao_cabe < 0.0);
+        assert!(nao_cabe.abs() > cabe);
+    }
+
+    /// A frase entra nos `reasons` e diz os dois números — quem auditar vê de
+    /// onde veio a certeza, como no resto do M1.
+    #[test]
+    fn a_frase_diz_os_dois_numeros() {
+        let (_, motivo) = ajuste_por_temporada(4, 14);
+        assert!(motivo.contains('4') && motivo.contains("14"), "{motivo}");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::metadata::tmdb::SeasonSummary;
@@ -1346,6 +1591,12 @@ mod tests {
         pares
             .iter()
             .map(|(season_number, episode_count)| SeasonSummary {
+                // A ficha da temporada (R63) não interessa aqui: este teste é
+                // sobre numeração absoluta, e só o par número/contagem entra.
+                name: None,
+                overview: None,
+                poster_path: None,
+                air_date: None,
                 season_number: *season_number,
                 episode_count: *episode_count,
             })

@@ -35,6 +35,15 @@ fn normalize(text: &str) -> String {
     NON_ALNUM.replace_all(&folded, " ").trim().to_string()
 }
 
+/// A similaridade de título, exposta pra quem pontua **pasta** (R76).
+///
+/// Um nome só, usado nos dois lugares: se a pasta e o arquivo medirem
+/// semelhança de formas diferentes, eles passam a discordar sobre o mesmo
+/// texto.
+pub(crate) fn similaridade_de_titulo(titulo: &str, candidato: &Candidate) -> (f32, String) {
+    title_similarity(titulo, candidato)
+}
+
 fn title_similarity(guess_title: &str, candidate: &Candidate) -> (f32, String) {
     let needle = normalize(guess_title);
 

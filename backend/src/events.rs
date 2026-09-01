@@ -33,6 +33,24 @@ pub enum AppEvent {
         finished: bool,
         /// Quem emitiu. O próprio device ignora o próprio eco.
         device_id: String,
+        /// De quem é este progresso.
+        ///
+        /// O evento já dizia *onde* alguém parou e nunca *quem* — o que bastava
+        /// pro uso original (o mesmo usuário corrigindo a posição entre os
+        /// próprios aparelhos, filtrado por `device_id`), mas não pra marcar na
+        /// timeline onde as outras pessoas da casa pararam no mesmo filme.
+        ///
+        /// **Os dois campos, e não só o nome:** o nome é o que a tela escreve
+        /// ("rudney parou aos 42min"), o `user_id` é o que ela usa pra agrupar
+        /// e pra descartar a própria marca — `display_name` não é único e pode
+        /// mudar, então filtrar por ele erraria em ambos os casos.
+        ///
+        /// Isto atribui a uma pessoa o que já era público no barramento: a
+        /// posição em si já ia pra todos os aparelhos autenticados desde
+        /// sempre. Numa casa é o ponto; se um dia houver progresso privado, o
+        /// filtro é aqui, na publicação.
+        user_id: Uuid,
+        quem_nome: String,
     },
     ScanFinished {
         added: u64,

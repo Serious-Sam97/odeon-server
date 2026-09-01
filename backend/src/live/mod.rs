@@ -343,16 +343,57 @@ async fn gravar_grade(
 /// "Sherlock" (a série, no ErsatzTV) NÃO casa com "Sherlock Holmes" (o filme,
 /// na biblioteca), e é isso que se quer.
 async fn ligar_obras(pool: &PgPool, source_id: Uuid) -> anyhow::Result<u64> {
-    let r = sqlx::query(
+    // --- 1. obra ----------------------------------------------------------
+    //
+    // **R68 — dois rips do mesmo filme não são ambiguidade.**
+    //
+    // O `count(*)` contava linhas, e o acervo tem 44 filmes em duas cópias.
+    // *007 Contra Goldfinger* aparecia como "duas obras com o mesmo título" e
+    // era descartado como homônimo — quando as duas são `tmdb 658`, o mesmo
+    // filme. `count(DISTINCT grupo)` usa a mesma identificação que agrupa
+    // versões na biblioteca (R47), conta a caixa da locadora (R60) e conta os
+    // eixos do guia (R59). Uma regra, quatro lugares.
+    //
+    // **E ter capa deixou de ser exigência pra entrar na lista.**
+    //
+    // O `WHERE artwork ? 'poster'` estava lá pra o cartão poder mostrar alguma
+    // coisa, e o efeito colateral era descartar o que não tem capa — clipe,
+    // sobretudo. *Hans Zimmer Friends Diamond In The Desert* está no acervo
+    // com o título **idêntico** ao do EPG, e não casava por ser um
+    // `music_video` sem pôster. Casar sem capa ainda vale: o cartão abre a
+    // ficha e o "ver desde o início" funciona.
+    //
+    // A capa vira **desempate** em vez de porta: `quantas = 1` aceita título
+    // que resolve pra um grupo só, e `com_arte = 1` aceita quando entre os
+    // homônimos existe **um** com arte — que é quase sempre o identificado,
+    // enquanto os outros são nome de arquivo. Medido, nos 1.057 programas:
+    //
+    // | regra | programas que casam |
+    // |---|---|
+    // | exigindo capa (como era) | 329 |
+    // | sem exigir capa | 373, e perde 4 que a capa desambiguava |
+    // | **as duas juntas** | **377** |
+    let obras = sqlx::query(
         r#"
-        WITH candidatas AS (
-            SELECT lower(btrim(title)) AS chave,
-                   count(*) AS quantas,
-                   (array_agg(id ORDER BY (kind = 'movie') DESC,
-                                        (match_state = 'confirmed') DESC))[1] AS work_id,
-                   (array_agg(year ORDER BY (kind = 'movie') DESC))[1] AS ano
+        WITH com_grupo AS (
+            SELECT id, year, kind, match_state,
+                   artwork ? 'poster' AS tem_arte,
+                   lower(btrim(title)) AS chave,
+                   COALESCE(CASE WHEN kind = 'movie' THEN external_ids->>'tmdb' END,
+                            id::text)  AS grupo
             FROM work
-            WHERE artwork ? 'poster'
+            WHERE match_state <> 'ignored'
+        ),
+        candidatas AS (
+            SELECT chave,
+                   count(DISTINCT grupo) AS quantas,
+                   count(DISTINCT grupo) FILTER (WHERE tem_arte) AS com_arte,
+                   (array_agg(id ORDER BY tem_arte DESC,
+                                        (kind = 'movie') DESC,
+                                        (match_state = 'confirmed') DESC))[1] AS work_id,
+                   (array_agg(year ORDER BY tem_arte DESC,
+                                         (kind = 'movie') DESC))[1] AS ano
+            FROM com_grupo
             GROUP BY 1
         )
         UPDATE programme p
@@ -360,7 +401,7 @@ async fn ligar_obras(pool: &PgPool, source_id: Uuid) -> anyhow::Result<u64> {
           FROM candidatas c
          WHERE p.channel_id IN (SELECT id FROM channel WHERE source_id = $1)
            AND c.chave = lower(btrim(p.title))
-           AND c.quantas = 1
+           AND (c.quantas = 1 OR c.com_arte = 1)
            -- Ano discordante derruba o casamento: título igual e ano diferente
            -- quase sempre é remake ou homônimo.
            AND (p.year IS NULL OR c.ano IS NULL OR p.year = c.ano)
@@ -369,8 +410,49 @@ async fn ligar_obras(pool: &PgPool, source_id: Uuid) -> anyhow::Result<u64> {
     .bind(source_id)
     .execute(pool)
     .await?;
-    tracing::info!(ligados = r.rows_affected(), "programas ligados a obras");
-    Ok(r.rows_affected())
+
+    // --- 2. coleção -------------------------------------------------------
+    //
+    // **O EPG de uma série anuncia o nome da série**, e nome de série não é
+    // título de obra nenhuma — é título de `collection`. Era isso que deixava
+    // *The Walking Dead* e *Futurama* sem capa: as duas existem como série,
+    // com pôster, e o casamento só olhava obras.
+    //
+    // Vem depois e só onde a obra não casou: apontar pro episódio certo é
+    // melhor que apontar pra série, quando dá pra saber qual episódio é.
+    //
+    // O mesmo corte de ambiguidade vale aqui, e ele importa: uma temporada
+    // órfã pode ter o mesmo nome da série.
+    let colecoes = sqlx::query(
+        r#"
+        WITH candidatas AS (
+            SELECT lower(btrim(title)) AS chave,
+                   count(*) AS quantas,
+                   (array_agg(id ORDER BY (kind = 'series') DESC))[1] AS collection_id
+            FROM collection
+            WHERE kind IN ('series', 'season')
+              AND artwork ? 'poster'
+            GROUP BY 1
+        )
+        UPDATE programme p
+           SET collection_id = c.collection_id
+          FROM candidatas c
+         WHERE p.channel_id IN (SELECT id FROM channel WHERE source_id = $1)
+           AND p.work_id IS NULL
+           AND c.chave = lower(btrim(p.title))
+           AND c.quantas = 1
+        "#,
+    )
+    .bind(source_id)
+    .execute(pool)
+    .await?;
+
+    tracing::info!(
+        obras = obras.rows_affected(),
+        colecoes = colecoes.rows_affected(),
+        "programas ligados"
+    );
+    Ok(obras.rows_affected() + colecoes.rows_affected())
 }
 
 /// Guarda o motivo da falha na própria fonte: sem isto, "não importou" vira

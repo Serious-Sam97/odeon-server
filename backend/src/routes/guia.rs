@@ -125,7 +125,9 @@ WITH visto AS (
 titulo AS (
     SELECT
         c.person_id,
-        COALESCE(g.grupo_id, w.id)                          AS titulo_id,
+        COALESCE(g.grupo_id::text,
+                 CASE WHEN w.kind = 'movie' THEN w.external_ids->>'tmdb' END,
+                 w.id::text)                                AS titulo_id,
         -- O pôster é AGREGADO, nunca chave de agrupamento. Pô-lo no GROUP BY
         -- parte o título: uma série sem arte própria faz cada episódio cair no
         -- pôster dele mesmo, e um diretor de 43 episódios de UMA série voltava
@@ -150,13 +152,20 @@ titulo AS (
         FROM collection_item ci
         JOIN collection season ON season.id = ci.collection_id
         LEFT JOIN collection series ON series.id = season.parent_id
-        WHERE ci.work_id = w.id AND season.kind IN ('season', 'series')
+        WHERE ci.work_id = w.id AND season.kind IN ('season', 'series', 'channel')
         LIMIT 1
     ) g ON true
     LEFT JOIN playback_state ps ON ps.work_id = w.id AND ps.user_id = $2
     WHERE c.role = $1
-      AND w.match_state IN ('auto', 'confirmed')
-    GROUP BY c.person_id, COALESCE(g.grupo_id, w.id)
+      AND w.match_state <> 'ignored'
+    -- R59: a mesma chave do `chave_de_grupo!`, com a série na frente. Aqui a
+    -- série já colapsava (senão um diretor de 43 episódios voltava como 43
+    -- títulos); o que faltava era colapsar dois rips do mesmo filme, que é o
+    -- que a biblioteca desenha quando se toca no nome da pessoa.
+    GROUP BY c.person_id,
+             COALESCE(g.grupo_id::text,
+                      CASE WHEN w.kind = 'movie' THEN w.external_ids->>'tmdb' END,
+                      w.id::text)
 )
 SELECT
     p.id, p.name, p.image_path, p.known_for,
@@ -251,21 +260,72 @@ pub async fn pessoas(
     ))
 }
 
-const GENEROS_SQL: &str = r#"
+/// A chave que conta **uma entrada da biblioteca**, e não um rip (R59).
+///
+/// ## O defeito, medido em 17/08/2026
+///
+/// O eixo de décadas dizia `2000 · 256`. Tocar nele abre a biblioteca filtrada
+/// por aquela década, que dizia **273**. Mesmo acervo, mesmo filtro, um toque
+/// entre os dois números.
+///
+/// A diferença tinha duas metades e elas puxavam pra lados opostos:
+///
+/// | | rips | grupos |
+/// |---|---|---|
+/// | identificados (`auto`/`confirmed`) | 256 ← o guia | 243 |
+/// | não ignorados | 286 (`?versions=flat`) | **273** ← a biblioteca |
+///
+/// - **13 a menos**, porque a biblioteca junta dois rips do mesmo filme num
+///   cartão desde a R47 e o guia contava os dois;
+/// - **30 a mais**, porque o guia exigia identificação e a biblioteca não —
+///   23 filmes em `needs_review` e 7 `unmatched` aparecem na grade e sumiam
+///   da contagem.
+///
+/// ## A regra
+///
+/// Quem faz a promessa é quem tem de honrá-la: um eixo do guia é um **botão
+/// para uma lista**, então ele conta o que aquela lista vai desenhar. Daí as
+/// duas mudanças que esta chave carrega:
+///
+/// 1. `count(DISTINCT` desta chave `)` — a mesma identificação que agrupa
+///    versões na biblioteca (`external_ids->>'tmdb'`, só em `kind = 'movie'`);
+///    quem não tem chave é grupo de um, pelo `id`.
+/// 2. `match_state <> 'ignored'` no lugar de `IN ('auto', 'confirmed')` — que
+///    é exatamente o que a biblioteca filtra. Ignorada é obra que alguém
+///    descartou de propósito; o resto existe na grade.
+///
+/// Nos eixos de gênero e país a segunda mudança não move número nenhum:
+/// medido, tag de gênero e de país só existe em obra identificada. Ela entra
+/// mesmo assim, porque a regra tem de ser uma só — o eixo de décadas é
+/// diferente justamente por não depender de metadado (o ano sai do nome do
+/// arquivo), e foi por isso que ele foi o que denunciou.
+///
+/// No eixo de pessoas ela move: **410 obras em `needs_review` têm crédito**.
+macro_rules! chave_de_grupo {
+    () => {
+        "COALESCE(CASE WHEN w.kind = 'movie' THEN w.external_ids->>'tmdb' END, w.id::text)"
+    };
+}
+
+const GENEROS_SQL: &str = concat!(
+    r#"
 SELECT
     t.value AS rotulo,
     t.namespace || ':' || t.value AS chave,
-    count(DISTINCT w.id) AS obras,
+    count(DISTINCT "#,
+    chave_de_grupo!(),
+    r#") AS obras,
     (array_remove(array_agg(DISTINCT w.artwork->>'poster'), NULL))[1:4] AS posters
 FROM tag t
 JOIN work_tag wt ON wt.tag_id = t.id
 JOIN work w ON w.id = wt.work_id
 WHERE t.namespace = 'genre'
   AND w.kind = 'movie'
-  AND w.match_state IN ('auto', 'confirmed')
+  AND w.match_state <> 'ignored'
 GROUP BY t.id, t.namespace, t.value
 ORDER BY obras DESC, rotulo
-"#;
+"#
+);
 
 /// O eixo que a R18 não pôde ter, e a R22 (§38) destravou.
 ///
@@ -278,42 +338,57 @@ ORDER BY obras DESC, rotulo
 /// 10 têm um filme só. Um país com uma obra não é uma prateleira, é uma linha
 /// de tabela — e dez delas empurrariam pra fora os 23 que rendem.
 ///
-/// O que este eixo **não** faz é esconder o topo. Estados Unidos tem 491 dos
-/// 548, e omiti-lo pra "melhorar" o eixo seria mentir por omissão. Quem diz a
-/// verdade sobre a forma do acervo é a legenda da tela, que traz o número que
-/// faz o eixo valer a pena: **54 filmes fora dos Estados Unidos**.
-const PAISES_SQL: &str = r#"
+/// O que este eixo **não** faz é esconder o topo. Estados Unidos domina, e
+/// omiti-lo pra "melhorar" o eixo seria mentir por omissão. Quem diz a verdade
+/// sobre a forma do acervo é a legenda da tela, que traz o número que faz o
+/// eixo valer a pena: os filmes **fora** dos Estados Unidos.
+///
+/// (Os números que este comentário trazia — 491 de 548, e 54 fora — eram de
+/// antes da R59, que passou a contar como a biblioteca conta. Hoje são 679 e
+/// 83. Não vale fixá-los de novo aqui: o acervo cresce, e o eixo é conferido
+/// contra `/api/library` com o mesmo filtro, que é o teste que não envelhece.)
+const PAISES_SQL: &str = concat!(
+    r#"
 SELECT
     t.value AS rotulo,
     t.namespace || ':' || t.value AS chave,
-    count(DISTINCT w.id) AS obras,
+    count(DISTINCT "#,
+    chave_de_grupo!(),
+    r#") AS obras,
     (array_remove(array_agg(DISTINCT w.artwork->>'poster'), NULL))[1:4] AS posters
 FROM tag t
 JOIN work_tag wt ON wt.tag_id = t.id
 JOIN work w ON w.id = wt.work_id
 WHERE t.namespace = 'country'
   AND w.kind = 'movie'
-  AND w.match_state IN ('auto', 'confirmed')
+  AND w.match_state <> 'ignored'
 GROUP BY t.id, t.namespace, t.value
-HAVING count(DISTINCT w.id) >= 2
+HAVING count(DISTINCT "#,
+    chave_de_grupo!(),
+    r#") >= 2
 ORDER BY obras DESC, rotulo
-"#;
+"#
+);
 
 /// Década é `(ano / 10) * 10` — divisão inteira no Postgres, sem `date_trunc`,
 /// porque `work.year` é um `int` e não uma data.
-const DECADAS_SQL: &str = r#"
+const DECADAS_SQL: &str = concat!(
+    r#"
 SELECT
     ((w.year / 10) * 10)::text AS rotulo,
     ((w.year / 10) * 10)::text AS chave,
-    count(*) AS obras,
+    count(DISTINCT "#,
+    chave_de_grupo!(),
+    r#") AS obras,
     (array_remove(array_agg(DISTINCT w.artwork->>'poster'), NULL))[1:4] AS posters
 FROM work w
 WHERE w.year IS NOT NULL
   AND w.kind = 'movie'
-  AND w.match_state IN ('auto', 'confirmed')
+  AND w.match_state <> 'ignored'
 GROUP BY 1, 2
 ORDER BY rotulo DESC
-"#;
+"#
+);
 
 /// A capa do guia: um punhado de cada eixo, com o suficiente pra desenhar as
 /// prateleiras sem uma segunda ida ao servidor.
@@ -356,15 +431,17 @@ pub async fn eixos(
     // rodapé. Este contador é a pergunta que ninguém conseguia fazer antes da
     // R22 — *"o que eu tenho que não é de Hollywood?"* — e ele fica na legenda
     // da seção, ao lado da lista, em vez de escondê-la.
-    let fora_de_hollywood: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM work w
-         WHERE w.kind = 'movie' AND w.match_state IN ('auto', 'confirmed')
+    let fora_de_hollywood: i64 = sqlx::query_scalar(concat!(
+        "SELECT count(DISTINCT ",
+        chave_de_grupo!(),
+        ") FROM work w
+         WHERE w.kind = 'movie' AND w.match_state <> 'ignored'
            AND EXISTS (SELECT 1 FROM work_tag wt JOIN tag t ON t.id = wt.tag_id
                         WHERE wt.work_id = w.id AND t.namespace = 'country')
            AND NOT EXISTS (SELECT 1 FROM work_tag wt JOIN tag t ON t.id = wt.tag_id
                             WHERE wt.work_id = w.id AND t.namespace = 'country'
-                              AND t.value = 'Estados Unidos')",
-    )
+                              AND t.value = 'Estados Unidos')"
+    ))
     .fetch_one(&state.pool)
     .await
     .unwrap_or(0);

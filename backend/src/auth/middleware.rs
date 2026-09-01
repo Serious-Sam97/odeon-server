@@ -40,6 +40,10 @@ fn is_public(path: &str) -> bool {
             // R26: trocar um convite por conta acontece antes de haver sessão.
             // O código é a credencial, e ele tem 128 bits e vence em 7 dias.
             | "/api/convites/resgatar"
+            // R46: idem pra TV trocar o código do celular por sessão. Aqui o
+            // código tem 40 bits, e o que compensa são os cinco minutos, o uso
+            // único e o código único por pessoa — ver `0040_pareamento.sql`.
+            | "/api/pareamento/resgatar"
     )
 }
 
@@ -70,12 +74,32 @@ fn is_public(path: &str) -> bool {
 /// quem mora aqui. A alternativa era um terceiro tipo de token só pro
 /// barramento, e três escopos pra isso é mais máquina do que o risco pede.
 fn accepts_query_token(path: &str) -> bool {
+    // R80: `/api/stream/{id}/baixar` cai aqui pelo mesmo prefixo — é bytes de
+    // mídia buscados por um download, que também não manda cabeçalho.
     path.starts_with("/api/stream/")
         || path.starts_with("/api/hls/")
         || path.starts_with("/artwork/")
         || path.starts_with("/scrub/")
         || path == "/api/events"
         || (path.starts_with("/api/media/") && path.contains("/subtitles"))
+}
+
+/// Onde o token **de arte** vale — e é uma lista de um item só (R45).
+///
+/// O escopo `arte` existe porque a fileira da home da Google TV publica uma
+/// `Uri` no `TvProvider` e o launcher a busca dias depois, com o app fechado.
+/// Pra isso o token dura um ano, e é justamente o ano que obriga esta função a
+/// ser estreita: `/api/stream/` entrega o filme, `/scrub/` entrega quadros do
+/// filme, o barramento entrega o que acontece na casa. Nada disso é pôster
+/// baixado do TMDB, e nada disso aceita o token longo.
+///
+/// A conferência não é só aqui: `usuario_por_token_de_arte` filtra
+/// `escopo = 'arte'` no `SELECT`, e `usuario_por_token_de_midia` filtra
+/// `escopo = 'midia'`. Esta função escolhe **se** vale a pena perguntar; o banco
+/// responde **o quê**. Uma camada só seria uma camada a menos do que o prazo
+/// pede.
+fn aceita_token_de_arte(path: &str) -> bool {
+    path.starts_with("/artwork/")
 }
 
 fn bearer(request: &Request) -> Option<String> {
@@ -158,12 +182,34 @@ pub async fn require_auth(
     // mídia, e por oito horas; ele não lista biblioteca, não aluga e não
     // administra nada. E um token de sessão **deixa de funcionar na query** —
     // que é o que faz a separação valer alguma coisa em vez de ser cerimônia.
-    let user = match bearer(&request).or_else(|| cookie(&request)) {
-        Some(token) => auth::user_for_token(&state.pool, &token).await,
-        None => match accepts_query_token(&path).then(|| query_token(&request)).flatten() {
-            Some(token) => auth::usuario_por_token_de_midia(&state.pool, &token).await,
-            None => None,
+    //
+    // **E desde a R45 a query resolve dois escopos, nesta ordem.** O de mídia
+    // primeiro, porque é o que chega em toda reprodução; o de arte só depois, e
+    // só se o caminho for `/artwork/`. Um token de arte numa rota de mídia não
+    // encontra linha em nenhuma das duas consultas e cai em 401, que é o que se
+    // quer de uma credencial de um ano.
+    // **`sessao` só existe no ramo de sessão** (R61). Um token de mídia ou de
+    // arte na query não diz de qual aparelho ele é — ele *é* a credencial do
+    // aparelho, e quem a emitiu já sabia. Deixar `None` aqui é a resposta
+    // honesta, e o `emitir_token_de_midia` trata órfão como órfão.
+    let (user, sessao) = match bearer(&request).or_else(|| cookie(&request)) {
+        Some(token) => match auth::user_for_token(&state.pool, &token).await {
+            Some(autenticado) => (Some(autenticado.user), Some(autenticado.sessao_id)),
+            None => (None, None),
         },
+        None => {
+            let user = match accepts_query_token(&path).then(|| query_token(&request)).flatten() {
+                Some(token) => match auth::usuario_por_token_de_midia(&state.pool, &token).await {
+                    Some(user) => Some(user),
+                    None if aceita_token_de_arte(&path) => {
+                        auth::usuario_por_token_de_arte(&state.pool, &token).await
+                    }
+                    None => None,
+                },
+                None => None,
+            };
+            (user, None)
+        }
     };
 
     let Some(user) = user else {
@@ -172,6 +218,9 @@ pub async fn require_auth(
 
     // O handler pega daqui pelo extractor AuthUser/AdminUser.
     request.extensions_mut().insert(user);
+    if let Some(sessao) = sessao {
+        request.extensions_mut().insert(auth::Sessao(sessao));
+    }
     Ok(next.run(request).await)
 }
 
@@ -200,6 +249,11 @@ mod tests {
         assert!(is_public("/api/auth/login"));
         assert!(is_public("/api/auth/setup"));
         assert!(is_public("/api/health"));
+        // as duas trocas que acontecem antes de haver sessão deste lado
+        assert!(is_public("/api/convites/resgatar"));
+        assert!(is_public("/api/pareamento/resgatar"));
+        // …mas pedir o código exige sessão: quem pede é o celular já logado
+        assert!(!is_public("/api/pareamento"));
         // e nada além disso
         assert!(!is_public("/api/works"));
         assert!(!is_public("/api/auth/users"));
@@ -252,6 +306,44 @@ mod tests {
         assert!(!accepts_query_token("/api/works"));
         assert!(!accepts_query_token("/api/auth/users"));
         assert!(!accepts_query_token("/api/curation/for-you"));
+    }
+
+    /// **A invariante da R45**: o token longo abre pôster, e só pôster.
+    ///
+    /// Ele dura um ano — 1095 vezes o de mídia. Se esta lista crescer pra
+    /// `/api/stream/` ou `/scrub/`, o que vaza num `access.log` deixa de ser
+    /// "esta casa tem a capa de tal filme" e passa a ser o acervo, por um ano.
+    #[test]
+    fn o_token_de_arte_so_abre_arte() {
+        assert!(aceita_token_de_arte("/artwork/tmdb-668-poster.jpg"));
+
+        // tudo o mais aceita token na query, mas não o de arte
+        for path in [
+            "/api/stream/abc",
+            "/api/hls/abc/index.m3u8",
+            "/scrub/x.jpg",
+            "/api/events",
+            "/api/media/abc/subtitles/0",
+        ] {
+            assert!(accepts_query_token(path), "{path} saiu da query");
+            assert!(!aceita_token_de_arte(path), "{path} aceitou token de arte");
+        }
+    }
+
+    /// O escopo não pode viver só no `if` do middleware: quem confere de
+    /// verdade é o `SELECT`. Se as duas consultas deixarem de filtrar `escopo`,
+    /// um token de arte volta a abrir mídia e o teste acima não percebe.
+    #[test]
+    fn as_duas_consultas_filtram_escopo() {
+        let fonte = include_str!("mod.rs");
+        assert!(
+            fonte.contains("m.escopo = 'midia'"),
+            "a consulta de mídia parou de filtrar escopo"
+        );
+        assert!(
+            fonte.contains("m.escopo = 'arte'"),
+            "a consulta de arte parou de filtrar escopo"
+        );
     }
 
     #[test]

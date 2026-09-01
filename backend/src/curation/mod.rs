@@ -15,7 +15,19 @@ use taste::TasteProfile;
 
 /// Quantos candidatos o banco entrega pra pontuação fina em Rust. Ordenados por
 /// similaridade quando há vetor de gosto, então o corte não é arbitrário.
-const CANDIDATE_POOL: i64 = 400;
+///
+/// ⚠️ **Subiu de 400 pra 1.500 na R79, e a tentativa de voltar foi medida.**
+///
+/// O filtro de episódio (só o primeiro ainda não visto de cada série) entra
+/// dentro do `near`, antes do corte por distância — e mesmo assim 400 não
+/// basta: com 400 a fileira volta a 9 itens, **nenhum episódio**. O gosto de
+/// quem assiste série puxa a vizinhança inteira pra episódios do meio das
+/// séries em andamento, e o que sobra elegível fica além do corte.
+///
+/// Com 1.500: 24 itens, e o episódio que aparece é o **piloto**. O custo é os
+/// quatro `JOIN LATERAL` rodarem em 1.500 linhas em vez de 400 — medido,
+/// `/api/curation/for-you` em 0,4 s.
+const CANDIDATE_POOL: i64 = 1500;
 
 /// "Tenho 40 minutos" não pode devolver um filme de 3h. 1.5x dá folga pros
 /// créditos e pra quem arredondou o tempo disponível.
@@ -202,6 +214,7 @@ struct CandidateRow {
 const CANDIDATES_BODY: &str = r#"
     w.id, w.kind, w.title, w.year, w.season_number, w.episode_number,
     w.match_state, w.match_confidence, w.dominant_color,
+    w.overview,
     w.artwork->>'poster' AS poster,
     w.artwork->>'backdrop' AS backdrop,
     w.artwork->>'still' AS still,
@@ -224,7 +237,7 @@ LEFT JOIN LATERAL (
     FROM collection_item ci
     JOIN collection season ON season.id = ci.collection_id
     LEFT JOIN collection series ON series.id = season.parent_id
-    WHERE ci.work_id = w.id AND season.kind IN ('season', 'series')
+    WHERE ci.work_id = w.id AND season.kind IN ('season', 'series', 'channel')
     LIMIT 1
 ) s ON true
 LEFT JOIN LATERAL (
@@ -241,6 +254,26 @@ LEFT JOIN playback_state ps ON ps.work_id = w.id AND ps.user_id = $1
 LEFT JOIN work_feedback fb ON fb.work_id = w.id AND fb.user_id = $1
 WHERE COALESCE(fb.verdict, '') <> 'block'
   AND ($3 OR COALESCE(ps.finished, false) = false)
+  -- **Ninguém começa uma série pelo décimo terceiro episódio** (R79).
+  --
+  -- A fileira do "para você" trouxe *Episódio 13* do Heartland, e o problema
+  -- não era o título: era o episódio. O `for-you` recomendava a obra crua, e
+  -- uma série de 161 episódios tem 161 chances de sortear o 13.
+  --
+  -- A regra: um episódio só é recomendável quando **não há nenhum anterior
+  -- ainda não visto** na mesma série. Série intocada oferece o primeiro; série
+  -- em andamento oferece o próximo — que é o que "continuar" já significa em
+  -- todo o resto do produto.
+  --
+  -- ⚠️ Filme, clipe e vídeo de canal não têm ordem entre si, e por isso passam
+  -- direto: `w.kind <> 'episode'`.
+  --
+  -- ⚠️ **Só compara com quem tem número.** A primeira versão usava
+  -- `COALESCE(…, 0)` nos dois lados, e aí todo episódio sem numeração — e todo
+  -- especial, que é temporada 0 — passava a vir "antes" do E01 e bloqueava a
+  -- série inteira. Medido: a fileira caiu de 24 itens para 9, **nenhum
+  -- episódio**. Ausência de número não é posição zero; é ausência.
+  AND (w.kind <> 'episode' OR w.id = ANY($5))
   -- Recomendar exige saber O QUE se está recomendando.
   --
   -- Sem estas duas linhas, 12 dos 24 primeiros itens eram nome de arquivo com
@@ -275,6 +308,13 @@ fn candidates_sql() -> String {
             SELECT id, embedding <=> $2::vector AS distance
             FROM work
             WHERE embedding IS NOT NULL
+              -- ⚠️ **Aqui, e não só lá embaixo.** O filtro de episódio derruba
+              -- 9.846 candidatos para 234; aplicado depois do corte por
+              -- vizinhança, ele esvaziava a fileira, porque os 1.500 mais
+              -- próximos do gosto de quem assiste série são quase todos
+              -- episódios do meio das séries que a pessoa já vê. Medido: 24
+              -- itens viraram 9, todos filme.
+              AND (kind <> 'episode' OR id = ANY($5))
             ORDER BY embedding <=> $2::vector
             LIMIT $4
         )
@@ -322,11 +362,15 @@ pub async fn recommend(
         candidates_sql()
     };
 
+    // R79 — quais episódios são oferecíveis, resolvido **antes** da consulta.
+    let oferecivel = episodios_ofereciveis(pool, user_id).await;
+
     let candidates: Vec<CandidateRow> = sqlx::query_as(&sql)
         .bind(user_id)
         .bind(&taste_literal)
         .bind(context.include_finished)
         .bind(CANDIDATE_POOL)
+        .bind(&oferecivel)
         .fetch_all(pool)
         .await?;
 
@@ -340,6 +384,92 @@ pub async fn recommend(
     scored.truncate(context.limit.clamp(1, 100) as usize);
 
     Ok((profile, scored))
+}
+
+/// **O primeiro episódio ainda não visto de cada série** — R79.
+///
+/// ## O que ela conserta
+///
+/// A fileira do "para você" trouxe *Episódio 13* do Heartland. O problema não
+/// era o título: era o episódio. O `for-you` recomendava a obra crua, e uma
+/// série de 161 episódios tem 161 chances de sortear o décimo terceiro —
+/// **ninguém começa uma série pelo décimo terceiro episódio**.
+///
+/// Série intocada passa a oferecer o primeiro; série em andamento, o próximo —
+/// que é o que "continuar" já significa no resto do produto.
+///
+/// ## Por que é uma consulta separada, e não uma cláusula
+///
+/// Ela nasceu como `NOT EXISTS` correlacionado dentro do `CANDIDATES_BODY`, e
+/// **não funcionou**: o corte por vizinhança escolhe os 1.500 mais próximos do
+/// gosto de quem assiste, que para quem vê série são quase todos episódios do
+/// meio das séries em andamento. Filtrar depois disso esvaziava a fileira —
+/// medido, 24 itens viraram 9, todos filme.
+///
+/// Resolvida antes, ela vira uma lista de ids que o `near` usa **na mesma
+/// cláusula onde o índice HNSW trabalha**, sem subconsulta correlacionada. São
+/// 234 ids neste acervo, de 9.846 episódios elegíveis.
+///
+/// ⚠️ Episódio sem número passa direto: sem numeração não há "anterior", e
+/// inventar posição zero foi o primeiro erro desta função — com `COALESCE(…,
+/// 0)` nos dois lados, todo especial e todo episódio sem número vinha "antes"
+/// do E01 e bloqueava a série inteira.
+async fn episodios_ofereciveis(pool: &PgPool, user_id: Uuid) -> Vec<Uuid> {
+    // ⚠️ **Uma passada com janela, e não um `NOT EXISTS` por episódio.**
+    //
+    // A primeira versão perguntava, para cada um dos 9.846 episódios, "existe
+    // um anterior não visto?" — correlacionada, e **1,7 s** no `for-you`
+    // inteiro. Aqui a mesma pergunta é respondida de uma vez: ordena cada
+    // grupo e fica com o primeiro. Um `DISTINCT ON` no lugar de dez mil
+    // subconsultas.
+    sqlx::query_scalar(
+        r#"
+        WITH no_grupo AS (
+            SELECT DISTINCT ON (w.id)
+                   w.id,
+                   COALESCE(sa.parent_id, sa.id) AS grupo,
+                   COALESCE(w.season_number, 1)  AS temporada,
+                   w.episode_number              AS episodio
+            FROM work w
+            JOIN collection_item ci ON ci.work_id = w.id
+            JOIN collection sa ON sa.id = ci.collection_id
+                              AND sa.kind IN ('season', 'series')
+            LEFT JOIN playback_state ps ON ps.work_id = w.id AND ps.user_id = $1
+            WHERE w.kind = 'episode'
+              AND w.episode_number IS NOT NULL
+              -- Temporada 0 é a dos especiais: ela não abre série nenhuma.
+              AND COALESCE(w.season_number, 1) >= 1
+              AND COALESCE(ps.finished, false) = false
+            ORDER BY w.id
+        ),
+        primeiro AS (
+            SELECT DISTINCT ON (grupo) id
+            FROM no_grupo
+            ORDER BY grupo, temporada, episodio
+        )
+        SELECT id FROM primeiro
+        UNION
+        -- Episódio sem número, ou fora de qualquer série: não há "anterior"
+        -- que ele possa estar furando, então ele passa.
+        SELECT w.id FROM work w
+         WHERE w.kind = 'episode'
+           AND (w.episode_number IS NULL
+                OR NOT EXISTS (SELECT 1 FROM collection_item ci
+                                JOIN collection sa ON sa.id = ci.collection_id
+                                                  AND sa.kind IN ('season', 'series')
+                               WHERE ci.work_id = w.id))
+        "#,
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_else(|e| {
+        // ⚠️ Nunca em silêncio. Uma lista vazia aqui **exclui todo episódio**
+        // da fileira, e foi exatamente assim que o defeito se escondeu: 24
+        // itens viraram 9 e o log não disse nada.
+        tracing::warn!(error = %e, "lista de episódios oferecíveis falhou");
+        Vec::new()
+    })
 }
 
 /// No máximo duas obras da mesma série na frente da fila.
@@ -383,6 +513,45 @@ fn diversify(scored: Vec<Recommendation>) -> Vec<Recommendation> {
     // ordem dentro de cada grupo.
     frente.extend(excedente);
     frente
+}
+
+/// O substantivo que abre a frase da afinidade, pelo tipo da obra.
+///
+/// "filmes" fixo seria mentira em 94% do acervo, que é episódio.
+fn substantivo(kind: &str) -> &'static str {
+    match kind {
+        "movie" => "filmes",
+        "episode" | "series" | "season" => "séries",
+        "music_video" => "clipes",
+        _ => "títulos",
+    }
+}
+
+/// A etiqueta dita como pedaço de frase, com a preposição que o namespace pede.
+///
+/// A tela mostrava **«você costuma terminar Canadá (55%)»** — três cartões
+/// seguidos assim, medido em 16/08/2026 — porque aqui se jogava fora o
+/// namespace (`tag.split_once(':')` guardava só o valor) e a frase se montava
+/// com o que sobrava. O namespace é o que diz **como** a etiqueta entra: um
+/// país entra com "de onde vem", um gênero com "de que tipo é", um idioma com
+/// "em que língua".
+///
+/// A frase é montada aqui e não no cliente pelo mesmo motivo que o `reasons`
+/// existe pronto: são quatro aparelhos, e a regra de preposição do português
+/// escrita quatro vezes é a quarta redação de uma decisão que já tem dono.
+///
+/// **Namespace desconhecido cai no valor cru**, que é exatamente o que a tela
+/// mostra hoje. É de propósito: inventar preposição pra um namespace que
+/// ninguém sabe o que é seria trocar um defeito visível por um errado.
+fn etiqueta_dita(tag: &str, kind: &str) -> String {
+    let (namespace, valor) = tag.split_once(':').unwrap_or(("", tag));
+    let coisas = substantivo(kind);
+    match namespace {
+        "country" => format!("{coisas} {}", crate::metadata::regiao::de_pais(valor)),
+        "genre" => format!("{coisas} de {valor}"),
+        "lang" => format!("{coisas} em {valor}"),
+        _ => valor.to_string(),
+    }
 }
 
 /// A pontuação. Devolve `None` quando a obra deve sumir da lista (não cabe no
@@ -451,7 +620,7 @@ fn score(
                 .max_by(|a, b| a.1.total_cmp(&b.1))
                 .filter(|(_, v)| *v > 0.2)
             {
-                let label = tag.split_once(':').map(|(_, v)| v).unwrap_or(tag);
+                let label = etiqueta_dita(tag, &work.kind);
                 let percent = value * 100.0;
                 reasons.push(format!("você costuma terminar {label} ({percent:.0}%)"));
             }
@@ -460,7 +629,7 @@ fn score(
                 .min_by(|a, b| a.1.total_cmp(&b.1))
                 .filter(|(_, v)| *v < -0.3)
             {
-                let label = tag.split_once(':').map(|(_, v)| v).unwrap_or(tag);
+                let label = etiqueta_dita(tag, &work.kind);
                 reasons.push(format!("mas você larga {label} com frequência"));
             }
         }
@@ -594,6 +763,7 @@ mod tests {
                 match_state: "auto".into(),
                 match_confidence: None,
                 dominant_color: None,
+                overview: None,
                 poster: None,
                 backdrop: None,
                 still: None,
@@ -667,5 +837,40 @@ mod tests {
             rec("x4", Some("X"), 0.70),
         ];
         assert_eq!(titulos(&diversify(entrada)), ["x1", "y1", "x2", "x3", "x4"]);
+    }
+
+    /// A tela dizia «você costuma terminar Canadá (55%)». O namespace é o que
+    /// diz como a etiqueta entra na frase.
+    #[test]
+    fn a_preposicao_vem_do_namespace() {
+        assert_eq!(etiqueta_dita("country:Canadá", "movie"), "filmes do Canadá");
+        assert_eq!(etiqueta_dita("genre:Crime", "movie"), "filmes de Crime");
+        assert_eq!(etiqueta_dita("lang:japonês", "movie"), "filmes em japonês");
+    }
+
+    /// Nenhum cartão pode terminar num país — era o sintoma.
+    #[test]
+    fn nenhuma_frase_termina_no_nome_cru_do_pais() {
+        for tag in ["country:Canadá", "country:Alemanha", "country:Estados Unidos"] {
+            let frase = format!("você costuma terminar {}", etiqueta_dita(tag, "movie"));
+            let valor = tag.split_once(':').unwrap().1;
+            assert!(!frase.ends_with(&format!("terminar {valor}")), "{frase}");
+        }
+    }
+
+    /// 94% do acervo é episódio: "filmes" fixo mentiria na maioria dos cartões.
+    #[test]
+    fn o_substantivo_segue_o_tipo_da_obra() {
+        assert_eq!(etiqueta_dita("genre:Crime", "episode"), "séries de Crime");
+        assert_eq!(etiqueta_dita("genre:Crime", "other"), "títulos de Crime");
+    }
+
+    /// Namespace desconhecido continua caindo no valor cru — trocar o defeito
+    /// visível por uma preposição chutada seria pior.
+    #[test]
+    fn namespace_desconhecido_nao_ganha_preposicao_chutada() {
+        assert_eq!(etiqueta_dita("mood:sombrio", "movie"), "sombrio");
+        assert_eq!(etiqueta_dita("format:anime", "movie"), "anime");
+        assert_eq!(etiqueta_dita("sem_namespace", "movie"), "sem_namespace");
     }
 }

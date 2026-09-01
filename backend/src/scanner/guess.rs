@@ -33,7 +33,25 @@ pub struct Guess {
 }
 
 impl Guess {
+    /// O `kind` da obra: numeração manda, **menos onde a biblioteca já disse
+    /// o que guarda** (R75).
+    ///
+    /// A regra original era "tem número de episódio → é episódio", e ela vale
+    /// numa biblioteca de série. Numa de canal, não: um vídeo chamado
+    /// `001 - Payday 2` continua sendo vídeo de canal, e virava `episode` só
+    /// por ter número na frente.
+    ///
+    /// Medido em 20/08/2026: **329 obras** da biblioteca do YouTube estavam
+    /// como episódio — os 331 dos Irmãos Piologo entre elas. Apareciam na
+    /// prateleira `série` e ficavam **fora do canal**, que agrupa
+    /// `kind = 'video'`.
+    ///
+    /// O número **não** se perde: ele continua em `season`/`episode` e é o que
+    /// ordena o vídeo dentro da playlist.
     pub fn kind(&self, library_default: &str) -> String {
+        if library_default == "video" {
+            return library_default.to_string();
+        }
         if self.episode.is_some() || self.absolute_episode.is_some() {
             "episode".to_string()
         } else {
@@ -556,14 +574,147 @@ fn is_informative(title: &str, serial: bool) -> bool {
         return false;
     }
     let lower = trimmed.to_lowercase();
+    // **Palavra que descreve o arquivo, não a obra** (R71).
+    //
+    // `episode` já estava aqui; `episódio` não — e era o caso de **421
+    // arquivos** deste acervo, o segundo maior grupo da fila de revisão:
+    //
+    //     /media2/TV Show/ALF/Episódio 2x25 - Varsity Drag (Web-DL).mkv
+    //     /media2/TV Show/Liga da Justiça/Episódio 2x12 - A Better World.mkv
+    //
+    // O `SEASON_EP_X` consome o `2x25`, sobra "Episódio", e ele passava por
+    // título de obra. O provider então devolvia o que tem essa palavra no nome
+    // — *"Star & Sky Episódio Especial"*, *"The Witcher — Por Dentro dos
+    // Episódios"* — e três palpites errados iam pra revisão humana. **Não era
+    // escolha errada: era ausência de escolha**, e o trabalho não existia.
+    //
+    // Com a palavra aqui, o `guess_from_path` sobe um nível e acha ALF e a Liga
+    // da Justiça, que é onde a informação sempre esteve.
+    //
+    // ⚠️ A lista é de palavras **inteiras**, e isso é o que a torna segura:
+    // `matches!` compara a string toda, então *"Episódios de uma Guerra"*
+    // continua sendo um título. Acentuada e sem acento porque o disco tem as
+    // duas grafias, e `to_lowercase` preserva o acento.
     !matches!(
         lower.as_str(),
-        "video" | "movie" | "film" | "filme" | "index" | "main" | "playback" | "episode"
+        "video"
+            | "movie"
+            | "film"
+            | "filme"
+            | "index"
+            | "main"
+            | "playback"
+            | "episode"
+            | "episódio"
+            | "episodio"
+            | "episódios"
+            | "episodios"
+            | "capítulo"
+            | "capitulo"
+            | "temporada"
+            | "season"
+            | "disco"
+            | "disc"
     )
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// **R71 — 421 arquivos cujo nome não diz de que série são.**
+    ///
+    /// Os três caminhos são reais, copiados do disco. `episode` estava na lista
+    /// de palavras que não são título; `episódio`, não — e é a palavra que este
+    /// acervo usa.
+    #[test]
+    fn episodio_nao_e_titulo_e_a_pasta_e() {
+        let de = |caminho: &str| {
+            super::guess_from_path(
+                std::path::Path::new(caminho),
+                std::path::Path::new("/media2/TV Show"),
+                true,
+            )
+        };
+
+        assert_eq!(
+            de("/media2/TV Show/ALF/Episódio 2x25 - Varsity Drag (Web-DL do MAX-Brasil).mkv").title,
+            "ALF"
+        );
+        assert_eq!(
+            de("/media2/TV Show/Liga da Justiça/Episódio 2x12 - A Better World (2-2) - Web-DL.mkv")
+                .title,
+            "Liga da Justiça"
+        );
+        // E a numeração continua saindo do nome do arquivo.
+        let g = de("/media2/TV Show/ALF/Episódio 2x25 - Varsity Drag (Web-DL do MAX-Brasil).mkv");
+        assert_eq!(g.season, Some(2));
+        assert_eq!(g.episode, Some(25));
+    }
+
+    /// **A convenção de pastas desta casa**, dita pelo dono em 20/08/2026:
+    ///
+    /// > *"Pasta com nome da série e dentro uma pasta para cada temporada ou
+    /// > extras."*
+    ///
+    /// Ela vale pra série e pra vídeo de YouTube, e é a estrutura que o
+    /// `guess_from_path` foi feito pra ler — mas até a R71 ela não bastava
+    /// quando o arquivo dizia só "Episódio". Estes casos ficam escritos porque
+    /// **a convenção é dado**: se alguém mexer no `SEASON_DIR` ou no
+    /// `EXTRAS_DIR`, é aqui que quebra.
+    #[test]
+    fn a_estrutura_desta_casa() {
+        let de = |caminho: &str| {
+            super::guess_from_path(
+                std::path::Path::new(caminho),
+                std::path::Path::new("/media2/TV Show"),
+                true,
+            )
+        };
+
+        // Série / Temporada N / arquivo — dois níveis, e o do meio é pulado.
+        let g = de("/media2/TV Show/Um Maluco no Pedaço/Temporada 6/Episódio 6x17 - Titulo.mkv");
+        assert_eq!(g.title, "Um Maluco no Pedaço");
+        assert_eq!(g.season, Some(6));
+        assert_eq!(g.episode, Some(17));
+
+        // A pasta de temporada com nome de release também é pulada como
+        // temporada — mas ela **carrega o título**, e aí serve de fonte. É o
+        // caso de *A Grande Família* neste acervo.
+        let g = de("/media2/TV Show/A Grande Família/A.Grande.Família.S12.720p.WEB-DL/A.Grande.Família.S12E03.mp4");
+        assert_eq!(g.title, "A Grande Família");
+        assert_eq!(g.season, Some(12));
+
+        // Série / Extras / arquivo, quando o arquivo **não** se nomeia: a
+        // pasta de extras é pulada e a série vem de cima. "Especiais" é como
+        // esta casa escreve, e o `SEASON_DIR` já a conhece.
+        let g = de("/media2/TV Show/Liga da Justiça/Especiais/Episódio 1x01 - Bastidores.mkv");
+        assert_eq!(g.title, "Liga da Justiça");
+
+        // ⚠️ **E aqui está o limite de hoje, escrito de propósito.** Quando o
+        // extra tem nome próprio, ele vira o título e a série não é
+        // consultada: `ALF/Extras/Making Of.mkv` é a obra "Making Of", solta.
+        //
+        // Não é descuido do `guess_from_path` — é a regra dele: só sobe a
+        // árvore quando o nome do arquivo não informa nada, e "Making Of"
+        // informa. Ligar o extra à série pelo caminho é decisão de produto e
+        // não de parser: são 941 arquivos sob pastas de extras neste acervo, e
+        // **693 deles já estão `ignored`** — alguém decidiu, um a um, que eles
+        // não entram na biblioteca. Mudar isto reabriria essa decisão.
+        let g = de("/media2/TV Show/ALF/Extras/Making Of.mkv");
+        assert_eq!(g.title, "Making Of");
+    }
+
+    /// ⚠️ A lista é de palavras **inteiras**. Um título que começa com a
+    /// palavra não pode ser jogado fora junto.
+    #[test]
+    fn titulo_que_contem_a_palavra_continua_valendo() {
+        let g = super::guess_from_path(
+            std::path::Path::new("/tv/Episódios de uma Guerra/Episódio 1x01 - Piloto.mkv"),
+            std::path::Path::new("/tv"),
+            true,
+        );
+        assert_eq!(g.title, "Episódios de uma Guerra");
+    }
 
     /// **R54 — os três formatos que este acervo tinha e o parser não lia.**
     ///

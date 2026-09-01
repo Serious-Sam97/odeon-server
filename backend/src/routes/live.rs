@@ -42,6 +42,13 @@ pub struct CanalNoAr {
     /// nenhuma — e aí o botão simplesmente não aparece, em vez de aparecer e
     /// falhar. Medido: 11 dos 17 canais no ar têm casamento.
     pub work_id: Option<Uuid>,
+    /// A **série** que está passando, quando o programa é de série (R68).
+    ///
+    /// O EPG anuncia o nome da série, não o do episódio, então não há obra pra
+    /// apontar — há coleção. É por ela que a ficha da série abre, e é dela que
+    /// sai a capa quando não há obra. Nunca vem junto com `work_id`: um é o
+    /// alvo de quando o outro não existe.
+    pub collection_id: Option<Uuid>,
     pub media_file_id: Option<Uuid>,
 }
 
@@ -63,19 +70,25 @@ pub async fn channels(
                -- PROGRAMA, que costuma ser um quadro daquele episódio — mais
                -- específica que o pôster da série, que serve pra temporada
                -- inteira. O pôster fica por último, cortado, porque é em pé.
-               COALESCE(w.artwork->>'backdrop', p.arte, w.artwork->>'poster') AS arte,
+               -- R68: a capa da série entra no fim da mesma escada, depois da
+               -- arte do próprio programa. Ela é a menos específica de todas —
+               -- vale pra série inteira —, e por isso é a última.
+               COALESCE(w.artwork->>'backdrop', p.arte, w.artwork->>'poster',
+                        col.artwork->>'backdrop', col.artwork->>'poster') AS arte,
                p.work_id,
+               p.collection_id,
                (SELECT m.id FROM media_file m
                  WHERE m.work_id = p.work_id AND m.status = 'probed'
                  ORDER BY m.size_bytes DESC LIMIT 1) AS media_file_id
         FROM channel c
         LEFT JOIN LATERAL (
-            SELECT id, title, sub_title, starts_at, ends_at, work_id, arte
+            SELECT id, title, sub_title, starts_at, ends_at, work_id, collection_id, arte
             FROM programme
             WHERE channel_id = c.id AND starts_at <= $1 AND ends_at > $1
             ORDER BY starts_at DESC LIMIT 1
         ) p ON true
         LEFT JOIN work w ON w.id = p.work_id
+        LEFT JOIN collection col ON col.id = p.collection_id
         LEFT JOIN LATERAL (
             SELECT title FROM programme
             WHERE channel_id = c.id AND starts_at > $1
@@ -117,6 +130,10 @@ pub struct ProgramaDoGuia {
     /// A obra da sua biblioteca, quando existe. É o que permite ao modal dizer
     /// "isto está na sua biblioteca".
     pub work_id: Option<Uuid>,
+    /// A **série**, quando o programa é de série (R68) — o EPG anuncia o nome
+    /// da série, e ele não casa com obra nenhuma. Nunca vem junto com
+    /// `work_id`.
+    pub collection_id: Option<Uuid>,
     /// O arquivo da obra, quando ela existe — é o que "ver desde o início" toca.
     pub media_file_id: Option<Uuid>,
     /// Já agendado por você.
@@ -136,8 +153,9 @@ pub async fn guide(
 
     let programas = sqlx::query_as::<_, ProgramaDoGuia>(
         "SELECT p.id, p.channel_id, p.starts_at, p.ends_at, p.title, p.sub_title,
-                p.description, p.year, p.categoria, p.work_id,
-                COALESCE(w.artwork->>'backdrop', p.arte, w.artwork->>'poster') AS arte,
+                p.description, p.year, p.categoria, p.work_id, p.collection_id,
+                COALESCE(w.artwork->>'backdrop', p.arte, w.artwork->>'poster',
+                         col.artwork->>'backdrop', col.artwork->>'poster') AS arte,
                 (SELECT m.id FROM media_file m
                   WHERE m.work_id = p.work_id AND m.status = 'probed'
                   ORDER BY m.size_bytes DESC LIMIT 1) AS media_file_id,
@@ -145,6 +163,7 @@ pub async fn guide(
          FROM programme p
          JOIN channel c ON c.id = p.channel_id
          LEFT JOIN work w ON w.id = p.work_id
+         LEFT JOIN collection col ON col.id = p.collection_id
          LEFT JOIN programme_reminder r ON r.programme_id = p.id AND r.user_id = $3
          WHERE NOT c.hidden AND p.ends_at > $1 AND p.starts_at < $2
          ORDER BY p.channel_id, p.starts_at",

@@ -18,10 +18,22 @@ use crate::models::{
 };
 use crate::AppState;
 
+/// R63 — a arte e o progresso da coleção, que a ficha de série precisa.
+///
+/// O cliente montava a fileira de temporadas de `/api/works?collection=…`,
+/// agrupando por `season_number`, porque daqui não saía arte nenhuma: os
+/// campos existiam na tabela (`artwork`, `dominant_color`) e não na resposta.
+/// `finished_count` entra pelo mesmo motivo do cartão da biblioteca — é o que
+/// desenha a barra de "quanto desta temporada eu já vi".
 const COLLECTION_COLUMNS: &str = r#"
     c.id, c.kind, c.parent_id, c.title, c.year, c.overview, c.description,
     c.position, c.origin, c.provider_key,
-    COALESCE(agg.item_count, 0) AS item_count, agg.posters
+    c.artwork->>'poster'   AS poster,
+    c.artwork->>'backdrop' AS backdrop,
+    c.dominant_color,
+    COALESCE(agg.item_count, 0) AS item_count,
+    COALESCE(agg.finished_count, 0) AS finished_count,
+    agg.posters
 "#;
 
 /// Contagem e capas da **subárvore**, não dos filhos diretos.
@@ -40,6 +52,9 @@ const COLLECTION_COLUMNS: &str = r#"
 /// `c.id` — correto, e 4,9 s na árvore, porque roda 576 vezes. Aqui a recursão
 /// acontece uma vez só: `descendencia` casa cada coleção com toda a sua
 /// subárvore (raiz inclusa), e o `GROUP BY` agrega em cima disso.
+/// `$USUARIO` é trocado pelo marcador do id de quem pergunta — ver
+/// `collection_with`. Ele existe só pelo `finished_count`: "quantas eu já vi"
+/// é uma pergunta que não tem resposta sem saber quem é "eu".
 const COLLECTION_WITH: &str = r#"
 WITH RECURSIVE descendencia AS (
     SELECT id AS raiz, id AS no FROM collection
@@ -50,14 +65,24 @@ WITH RECURSIVE descendencia AS (
 agg AS (
     SELECT d.raiz,
            count(DISTINCT ci.work_id) AS item_count,
+           count(DISTINCT ci.work_id) FILTER (WHERE ps.finished) AS finished_count,
            (array_agg(w.artwork->>'poster')
                FILTER (WHERE w.artwork ? 'poster'))[1:4] AS posters
     FROM descendencia d
     JOIN collection_item ci ON ci.collection_id = d.no
     JOIN work w ON w.id = ci.work_id
+    LEFT JOIN playback_state ps ON ps.work_id = w.id AND ps.user_id = $USUARIO
     GROUP BY d.raiz
 )
 "#;
+
+/// O `COLLECTION_WITH` com o marcador do usuário no lugar certo.
+///
+/// Cada rota numera seus binds de um jeito — a lista já usa `$1` e `$2` pro
+/// filtro —, então o marcador não pode estar fixo no texto.
+fn collection_with(usuario: &str) -> String {
+    COLLECTION_WITH.replace("$USUARIO", usuario)
+}
 
 /// `COALESCE` porque coleção vazia não aparece no `agg` — e `NULL` viraria erro
 /// de decode no `i64` do `item_count`.
@@ -79,9 +104,33 @@ pub async fn list_tags(State(state): State<AppState>) -> AppResult<Json<Vec<TagR
 
 /// Namespaces com rótulo e cor. Não é uma lista de permitidos — qualquer
 /// namespace novo funciona; estes só ganham tratamento visual fixo.
+///
+/// **Todo namespace em uso sai daqui, tenha linha em `tag_namespace` ou não.**
+///
+/// Antes era um `SELECT` seco na tabela, e a tabela só conhece o que alguém
+/// semeou: o painel de filtros do celular mostrava `FORMATO · GÊNERO ·
+/// COUNTRY`, porque `country` nasceu no M4 e ninguém voltou no 0003. O
+/// `FULL OUTER JOIN` inverte a garantia — a lista passa a ser *o que o acervo
+/// tem*, e a tabela vira só a decoração de quem ela conhece.
+///
+/// O rótulo de queda é `initcap` do próprio namespace, e ele é feio de
+/// propósito: "Origin" na tela é um pedido de linha em `tag_namespace`, e é
+/// melhor que uma tradução chutada — o servidor não tem como saber que
+/// `country` se diz "País" (§18). Feio, porém, é diferente de gritado: a tela
+/// põe em caixa alta o que recebe, e `COUNTRY` não se lia como rótulo nenhum.
+///
+/// Posição 900 joga o não-nomeado pro fim, depois de todo mundo que tem lugar
+/// marcado — um namespace sem rótulo também não tem opinião sobre ordem.
 pub async fn list_namespaces(State(state): State<AppState>) -> AppResult<Json<Vec<TagNamespace>>> {
     let rows = sqlx::query_as::<_, TagNamespace>(
-        "SELECT namespace, label, color, position FROM tag_namespace ORDER BY position, label",
+        "SELECT COALESCE(tn.namespace, uso.namespace)      AS namespace,
+                COALESCE(tn.label, initcap(uso.namespace)) AS label,
+                tn.color,
+                COALESCE(tn.position, 900)                 AS position
+         FROM tag_namespace tn
+         FULL OUTER JOIN (SELECT DISTINCT namespace FROM tag) uso
+                      ON uso.namespace = tn.namespace
+         ORDER BY position, label",
     )
     .fetch_all(&state.pool)
     .await?;
@@ -177,10 +226,12 @@ pub struct CollectionFilter {
 
 pub async fn list_collections(
     State(state): State<AppState>,
+    user: AuthUser,
     Query(filter): Query<CollectionFilter>,
 ) -> AppResult<Json<Vec<CollectionRow>>> {
+    let com = collection_with("$3");
     let rows = sqlx::query_as::<_, CollectionRow>(&format!(
-        "{COLLECTION_WITH}
+        "{com}
          SELECT {COLLECTION_COLUMNS}
          FROM collection c
          {COLLECTION_JOIN}
@@ -190,17 +241,23 @@ pub async fn list_collections(
     ))
     .bind(filter.kind)
     .bind(filter.roots_only)
+    .bind(user.id())
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows))
 }
 
 /// A árvore inteira. Franquia → série → temporada, quantos níveis houver.
-pub async fn collection_tree(State(state): State<AppState>) -> AppResult<Json<Vec<CollectionNode>>> {
+pub async fn collection_tree(
+    State(state): State<AppState>,
+    user: AuthUser,
+) -> AppResult<Json<Vec<CollectionNode>>> {
+    let com = collection_with("$1");
     let all = sqlx::query_as::<_, CollectionRow>(&format!(
-        "{COLLECTION_WITH} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN}
+        "{com} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN}
          ORDER BY c.position NULLS LAST, c.title"
     ))
+    .bind(user.id())
     .fetch_all(&state.pool)
     .await?;
 
@@ -245,19 +302,26 @@ pub async fn collection_detail(
     user: AuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<Value>> {
+    let com = collection_with("$2");
     let collection = sqlx::query_as::<_, CollectionRow>(&format!(
-        "{COLLECTION_WITH} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN} WHERE c.id = $1"
+        "{com} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN} WHERE c.id = $1"
     ))
     .bind(id)
+    .bind(user.id())
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)?;
 
+    // Os filhos são as **temporadas** quando isto é uma série, e é deles que
+    // sai a fileira de temporadas da ficha (R63): cada um traz `title`,
+    // `overview`, `poster`, `position` (o número da temporada), `item_count`
+    // (quantos episódios) e `finished_count` (quantos você viu).
     let children = sqlx::query_as::<_, CollectionRow>(&format!(
-        "{COLLECTION_WITH} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN}
+        "{com} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN}
          WHERE c.parent_id = $1 ORDER BY c.position NULLS LAST, c.title"
     ))
     .bind(id)
+    .bind(user.id())
     .fetch_all(&state.pool)
     .await?;
 
@@ -277,6 +341,7 @@ pub async fn collection_detail(
         SELECT
             w.id, w.kind, w.title, w.year, w.season_number, w.episode_number,
             w.match_state, w.match_confidence, w.dominant_color,
+            w.overview,
             w.artwork->>'poster' AS poster,
             w.artwork->>'backdrop' AS backdrop,
             w.artwork->>'still' AS still,
@@ -352,6 +417,7 @@ async fn so_manual(state: &AppState, id: Uuid) -> AppResult<()> {
 
 pub async fn create_collection(
     State(state): State<AppState>,
+    user: AuthUser,
     Json(body): Json<NewCollection>,
 ) -> AppResult<Json<CollectionRow>> {
     if body.title.trim().is_empty() {
@@ -370,11 +436,12 @@ pub async fn create_collection(
     .fetch_one(&state.pool)
     .await?;
 
-    fetch_collection(&state, id).await.map(Json)
+    fetch_collection(&state, id, user.id()).await.map(Json)
 }
 
 pub async fn update_collection(
     State(state): State<AppState>,
+    user: AuthUser,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateCollection>,
 ) -> AppResult<Json<CollectionRow>> {
@@ -394,7 +461,7 @@ pub async fn update_collection(
     .execute(&state.pool)
     .await?;
 
-    fetch_collection(&state, id).await.map(Json)
+    fetch_collection(&state, id, user.id()).await.map(Json)
 }
 
 pub async fn delete_collection(
@@ -484,19 +551,32 @@ pub async fn reorder(
     Ok(Json(json!({ "ok": true, "reordered": body.items.len() })))
 }
 
-async fn fetch_collection(state: &AppState, id: Uuid) -> AppResult<CollectionRow> {
+async fn fetch_collection(state: &AppState, id: Uuid, usuario: Uuid) -> AppResult<CollectionRow> {
+    let com = collection_with("$2");
     sqlx::query_as::<_, CollectionRow>(&format!(
-        "{COLLECTION_WITH} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN} WHERE c.id = $1"
+        "{com} SELECT {COLLECTION_COLUMNS} FROM collection c {COLLECTION_JOIN} WHERE c.id = $1"
     ))
     .bind(id)
+    .bind(usuario)
     .fetch_optional(&state.pool)
     .await?
     .ok_or(AppError::NotFound)
 }
 
-pub async fn collections_of(state: &AppState, work_id: Uuid) -> AppResult<Vec<CollectionRow>> {
+/// As coleções a que uma obra pertence — é o que a ficha desenha embaixo.
+///
+/// ⚠️ **Recebe o usuário porque o `COLLECTION_WITH` conta `finished_count`**
+/// (R63). Não é opcional: sem o id, o `$USUARIO` do texto chega cru ao
+/// Postgres e a ficha inteira sai em 500. Foi o que aconteceu — ver o teste
+/// `nenhuma_consulta_de_colecao_esquece_o_usuario`.
+pub async fn collections_of(
+    state: &AppState,
+    work_id: Uuid,
+    usuario: Uuid,
+) -> AppResult<Vec<CollectionRow>> {
+    let com = collection_with("$2");
     let rows = sqlx::query_as::<_, CollectionRow>(&format!(
-        "{COLLECTION_WITH}
+        "{com}
          SELECT {COLLECTION_COLUMNS}
          FROM collection_item ci
          JOIN collection c ON c.id = ci.collection_id
@@ -505,6 +585,7 @@ pub async fn collections_of(state: &AppState, work_id: Uuid) -> AppResult<Vec<Co
          ORDER BY c.kind, c.title"
     ))
     .bind(work_id)
+    .bind(usuario)
     .fetch_all(&state.pool)
     .await?;
     Ok(rows)
@@ -614,5 +695,37 @@ mod tests {
             fonte.contains("ORDER BY ci.position NULLS LAST, w.year NULLS LAST, w.title"),
             "a ordem dos itens da coleção mudou de forma"
         );
+    }
+
+    /// **A regressão que este teste existe pra não deixar acontecer de novo.**
+    ///
+    /// A R63 pôs `finished_count` no `COLLECTION_WITH`, e com ele um
+    /// `$USUARIO` que **cada rota numera do seu jeito** — a lista já usa `$1` e
+    /// `$2` no filtro. Quem esqueceu de passar pelo `collection_with` mandou o
+    /// marcador cru pro Postgres, e o que chegou de volta foi
+    /// `syntax error at or near "$"` — em `/api/works/{id}`, ou seja, a ficha
+    /// inteira em 500 ao clicar num filme. Duas funções auxiliares ficaram pra
+    /// trás porque não são handlers e não apareceram na busca por rota.
+    ///
+    /// O erro é invisível na compilação: é texto virando SQL. Então a guarda é
+    /// ler o próprio arquivo — nenhuma consulta interpola a `const` direto.
+    #[test]
+    fn nenhuma_consulta_de_colecao_esquece_o_usuario() {
+        let fonte = include_str!("graph.rs");
+        // A `const` só pode ser citada onde ela é definida e onde o
+        // `collection_with` a consome — nunca dentro de um `format!`.
+        //
+        // A agulha é montada em pedaços de propósito: escrita inteira, ela
+        // apareceria neste próprio arquivo e o teste falharia sozinho.
+        let interpolada = format!("{}{}{}", "{", "COLLECTION_WITH", "}");
+        assert!(
+            !fonte.contains(&interpolada),
+            "alguma consulta interpola COLLECTION_WITH direto e vai mandar $USUARIO cru"
+        );
+        // E o marcador tem de continuar existindo: se alguém o renomear sem
+        // renomear no `replace`, o teste acima passaria e a query voltaria a
+        // quebrar.
+        assert!(fonte.contains(r#"ps.user_id = $USUARIO"#));
+        assert!(fonte.contains(r#"COLLECTION_WITH.replace("$USUARIO", usuario)"#));
     }
 }

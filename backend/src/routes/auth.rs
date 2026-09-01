@@ -32,6 +32,29 @@ fn clear_cookie() -> HeaderValue {
     HeaderValue::from_static("odeon_session=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
 }
 
+/// As duas formas de o token de sessão chegar. São as mesmas duas que o
+/// `require_auth` aceita — e é por isso que o `logout` tem de conhecer as duas:
+/// revogar só a que veio no header deixava a sessão da web viva.
+fn bearer_do_header(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+        .map(str::to_string)
+}
+
+fn token_do_cookie(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get(header::COOKIE)?
+        .to_str()
+        .ok()?
+        .split(';')
+        .filter_map(|parte| parte.trim().split_once('='))
+        .find(|(nome, _)| *nome == COOKIE_NAME)
+        .map(|(_, valor)| valor.to_string())
+}
+
 fn user_agent(headers: &HeaderMap) -> Option<String> {
     headers
         .get(header::USER_AGENT)?
@@ -135,7 +158,12 @@ pub async fn login(
     issue(&state, user_id, body.device_label.as_deref(), &headers).await
 }
 
-async fn issue(
+/// Cria a sessão e monta a resposta — token no corpo, cookie no cabeçalho.
+///
+/// `pub(crate)` por causa da R46: o resgate de pareamento entra por outro
+/// módulo e tem que sair **exatamente** com esta resposta. Um segundo lugar
+/// montando `LoginResponse` na mão é um segundo lugar pra esquecer o cookie.
+pub(crate) async fn issue(
     state: &AppState,
     user_id: Uuid,
     device_label: Option<&str>,
@@ -175,23 +203,50 @@ pub async fn me(AuthUser(user): AuthUser) -> Json<User> {
 pub async fn media_token(
     State(state): State<AppState>,
     AuthUser(user): AuthUser,
+    // R61: qual aparelho pediu. Sem isto a poda era por conta, e o celular
+    // derrubava a TV no meio do filme.
+    sessao: Option<axum::Extension<auth::Sessao>>,
 ) -> AppResult<Json<Value>> {
-    let token = auth::emitir_token_de_midia(&state.pool, user.id).await?;
+    let sessao = sessao.map(|axum::Extension(auth::Sessao(id))| id);
+    let token = auth::emitir_token_de_midia(&state.pool, user.id, sessao).await?;
     Ok(Json(json!({
         "token": token,
         "horas": auth::horas_do_token_de_midia(),
     })))
 }
 
+/// Emite um token de **arte** (R45), pra URL que vai ser guardada fora do app.
+///
+/// O caso é a fileira da home da Google TV: o que se entrega ao `TvProvider` é
+/// uma `Uri`, e quem a baixa é o launcher, dias depois, com o Odeon fechado.
+/// Um token de mídia não serve ali — ele vence em oito horas e é aposentado
+/// quando qualquer outro aparelho pede o dele.
+pub async fn artwork_token(
+    State(state): State<AppState>,
+    AuthUser(user): AuthUser,
+) -> AppResult<Json<Value>> {
+    let token = auth::emitir_token_de_arte(&state.pool, user.id).await?;
+    Ok(Json(json!({
+        "token": token,
+        "dias": auth::dias_do_token_de_arte(),
+    })))
+}
+
 pub async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<Response> {
     // Revoga o token exato que veio, não todos os do usuário: deslogar o
     // notebook não pode derrubar a TV.
-    if let Some(token) = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-    {
-        auth::revoke(&state.pool, token).await;
+    //
+    // **Header OU cookie** (R61). Só o header era metade do trabalho: o `login`
+    // devolve as duas coisas e a web usa o cookie, então "sair" ali limpava o
+    // cookie do navegador e **deixava a sessão viva no servidor** — 90 dias de
+    // credencial que a pessoa acredita ter encerrado. Medido nesta casa: dois
+    // `POST /api/auth/logout` responderam 200 e as duas linhas continuaram em
+    // `auth_session`.
+    //
+    // A ordem é a mesma do `require_auth`: header primeiro, cookie depois.
+    let token = bearer_do_header(&headers).or_else(|| token_do_cookie(&headers));
+    if let Some(token) = token {
+        auth::revoke(&state.pool, &token).await;
     }
 
     let mut response = Json(json!({ "ok": true })).into_response();
@@ -233,6 +288,13 @@ pub async fn change_password(
     // Trocar senha derruba as outras sessões: é o gesto de quem acha que
     // alguém entrou. Manter as antigas vivas anularia o motivo da troca.
     sqlx::query("DELETE FROM auth_session WHERE user_id = $1")
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
+    // E os tokens, os dois escopos (R45). O de arte dura um ano e sobrevive de
+    // propósito ao logout — este é o único gesto que o derruba, e tem que ser,
+    // senão "achei que alguém entrou" deixaria uma credencial de um ano viva.
+    sqlx::query("DELETE FROM media_token WHERE user_id = $1")
         .bind(user.id)
         .execute(&mut *tx)
         .await?;
@@ -471,4 +533,57 @@ pub async fn update_user(
         return Err(AppError::NotFound);
     }
     Ok(Json(json!({ "ok": true })))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cabecalhos(pares: &[(&str, &str)]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        for (nome, valor) in pares {
+            h.insert(
+                header::HeaderName::from_bytes(nome.as_bytes()).unwrap(),
+                HeaderValue::from_str(valor).unwrap(),
+            );
+        }
+        h
+    }
+
+    /// **R61.** O `logout` só olhava o header, e a web autentica por cookie:
+    /// sair limpava o cookie do navegador e deixava a sessão viva no servidor
+    /// por 90 dias. Medido — dois `POST /api/auth/logout` responderam 200 e as
+    /// duas linhas continuaram em `auth_session`.
+    #[test]
+    fn o_logout_acha_o_token_no_cookie_tambem() {
+        let so_cookie = cabecalhos(&[("cookie", "outro=1; odeon_session=abc123; mais=2")]);
+        assert_eq!(
+            bearer_do_header(&so_cookie).or_else(|| token_do_cookie(&so_cookie)),
+            Some("abc123".to_string())
+        );
+    }
+
+    /// O header ganha do cookie, na mesma ordem do `require_auth`. Divergir
+    /// faria o `logout` revogar uma sessão diferente da que abriu a chamada.
+    #[test]
+    fn o_header_ganha_do_cookie() {
+        let ambos = cabecalhos(&[
+            ("authorization", "Bearer doheader"),
+            ("cookie", "odeon_session=docookie"),
+        ]);
+        assert_eq!(
+            bearer_do_header(&ambos).or_else(|| token_do_cookie(&ambos)),
+            Some("doheader".to_string())
+        );
+    }
+
+    /// Sem nenhum dos dois não há o que revogar — e não pode explodir: o
+    /// `logout` é público, então ele recebe requisição sem credencial nenhuma.
+    #[test]
+    fn logout_sem_credencial_nao_explode() {
+        let vazio = cabecalhos(&[]);
+        assert_eq!(bearer_do_header(&vazio).or_else(|| token_do_cookie(&vazio)), None);
+        let cookie_sem_o_nosso = cabecalhos(&[("cookie", "tema=escuro")]);
+        assert_eq!(token_do_cookie(&cookie_sem_o_nosso), None);
+    }
 }

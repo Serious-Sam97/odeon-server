@@ -116,6 +116,153 @@ biblioteca".
 O `device_label` do login importa: é o rótulo que aparece na tela de aparelhos do
 admin. O app manda fabricante + modelo.
 
+### Aplicar uma pasta: a prévia responde, a escrita vira job
+
+Escrito em **25/08/2026** — **R81**. Isto MUDA o contrato de
+`POST /api/scopes/identify`: quem chamava e lia o resumo na resposta precisa
+passar a acompanhar um job.
+
+**Por quê.** Em 25/08 esta chamada morreu no ar aplicando o Popeye: o escopo foi
+gravado às 05:37:57, os episódios foram confirmados um por segundo até 05:40:01,
+e aí o túnel cortou (`Incoming request ended abruptly: context canceled`). São
+124 segundos, e a Cloudflare corta resposta de origem por volta dos 100. O
+navegador mostrou `TypeError: NetworkError when attempting to fetch resource` —
+que não diz nada. Dos 215 episódios, 149 tinham sido processados e 66 nunca
+foram alcançados: o axum cancela o handler junto com a conexão.
+
+Não dava pra empurrar o teto. A 1,2 obra por segundo, 100 segundos comportam
+~120 arquivos, e a fila tem pastas de 388, 331 e 313.
+
+| o que você quer | como fica |
+|---|---|
+| **ver o que vai acontecer** (`dry_run: true`) | síncrono, responde na hora |
+| **aplicar** (`dry_run: false`) | abre job, responde na hora com o `job_id` |
+
+```jsonc
+// A PRÉVIA — não mudou nada. 0,28 s medidos em 103 obras.
+POST /api/scopes/identify   { …, "dry_run": true }
+→ 200 { "afetados": 103, "confirmariam": 53, "ficariam_em_revisao": 50,
+        "chamadas_de_temporada": 1, "preview": [ …até 25 itens… ] }
+
+// A ESCRITA — mudou. Responde em ~30 ms, não espera o trabalho.
+POST /api/scopes/identify   { …, "dry_run": false }
+→ 200 { "started": true, "job_id": "…", "pasta": "…",
+        "acompanhe": "/api/jobs/<id>" }
+→ 200 { "started": false, "reason": "já há uma pasta sendo aplicada — …" }
+
+// O ACOMPANHAMENTO — rota nova.
+GET  /api/jobs/{id}
+→ 200 { "kind": "scope_apply", "state": "running",
+        "done": 60, "total": 103,
+        "progress": { "pasta": "…", "aplicados": 16, "arquivo": "Popeye - S01E067…" } }
+→ 404                                  // id que não existe
+POST /api/jobs/{id}/cancel
+→ 200 { "ok": true, "detalhe": "vai parar no próximo item — …" }
+```
+
+`state` termina em `succeeded`, `cancelled` ou `failed`. Em qualquer um dos três
+o resumo final está em `progress`, com os campos que a resposta síncrona
+devolvia antes — mais três novos:
+
+* **`afetados`** — quantos arquivos a pasta tinha.
+* **`processados`** — quantos foram VISTOS. Existe por causa do Popeye:
+  `aplicados: 112` sozinho não deixa ninguém saber se faltaram 66 arquivos ou se
+  eram só esses.
+* **`cancelado`** — se parou por pedido.
+
+⚠️ **Só uma pasta por vez** (`job_one_active_per_kind`). A segunda chamada
+devolve `started: false` — é recusa, não fila, e a tela deve dizer isso.
+
+⚠️ **O cancelamento é cooperativo.** Para entre um arquivo e outro, nunca no
+meio de um — cancelar entre gravar o candidato e aplicar a obra deixaria estado
+pela metade. O que já gravou, fica: não há transação envolvendo a pasta inteira,
+e é por isso que os 112 episódios do Popeye sobreviveram ao corte.
+
+Medido depois da mudança, na mesma pasta: resposta em **31 ms**, job completo em
+**32 s**, 80/80, com progresso visível e cancelamento funcionando.
+
+### Buscar no disco: os três gestos
+
+Escrito em **20/08/2026**, com o formato junto — a lição do token de arte.
+
+| gesto | chamada |
+|---|---|
+| buscar e identificar **os filmes** | `POST /api/scan?tipo=filme&then=match` |
+| buscar e identificar **as séries** | `POST /api/scan?tipo=serie&then=match` |
+| **os dois**, e o resto | `POST /api/scan?then=match` |
+
+```jsonc
+POST /api/scan?tipo=filme&then=match     // Authorization: Bearer <sessão de admin>
+→ 200 { "started": true, "job_id": "…", "then": "match" }
+→ 200 { "started": false, "reason": "scan já em andamento" }   // trava única
+```
+
+O andamento sai em `GET /api/scan/status` e `GET /api/jobs`; o fim vira evento
+no barramento (`ScanFinished`, depois `MatchFinished`).
+
+* **`tipo`** corta por `library.default_kind`. Aceita `filme`/`filmes`/`movie`
+  e `serie`/`série`/`series`/`episode`. **Ausente ou desconhecido varre tudo** —
+  um erro de digitação não pode varrer metade do acervo em silêncio.
+* **`then=match`** encadeia a identificação, e depois dela as sagas. Sem ele a
+  busca só descobre arquivo. O escopo do `tipo` **atravessa as duas etapas**:
+  "buscar os filmes" não identifica a série que estava na fila por acaso.
+* ⚠️ **Um `tipo` de cada vez não marca o outro como sumido.** A varredura de
+  filmes não enxerga as bibliotecas de série, então não conclui que elas
+  desapareceram. Conferido: `sumidos = 0` nas duas passadas.
+
+⚠️ **A trava é uma só pro servidor inteiro.** Duas buscas simultâneas devolvem
+`started: false` na segunda — não é fila, é recusa, e o cliente deve dizer isso
+em vez de fingir que enfileirou.
+
+### Os três tokens, e qual serve pra quê
+
+Escrito em **20/08/2026**, porque `grep -r artwork-token` dava zero em todos os
+clientes e a entrega de 17/08 estava no ar sem ninguém saber pedir. A lição de
+processo é dos dois lados: **entrega sem formato escrito é entrega que não
+existe.**
+
+| token | como se pede | dura | onde vale |
+|---|---|---|---|
+| **sessão** | `POST /api/auth/login` → `{token, user}` | 90 dias | header `Authorization: Bearer` ou cookie `odeon_session`. **Não** funciona em `?token=` |
+| **mídia** | `POST /api/auth/media-token` → `{token, horas}` | 8 h | `?token=` em `/api/stream/`, `/api/hls/`, `/artwork/`, `/scrub/`, `/api/events`, legendas |
+| **arte** | `POST /api/auth/artwork-token` → `{token, dias}` | **365 dias** | `?token=` em **`/artwork/` e mais nada** |
+
+As três emissões são autenticadas do jeito normal — header ou cookie. O token é
+o que a rota **devolve**, nunca o que a abre.
+
+```jsonc
+POST /api/auth/artwork-token          // Authorization: Bearer <sessão>
+→ 200 { "token": "…64 hex…", "dias": 365 }
+
+GET /artwork/<caminho>?token=<o de arte>   → 200
+GET /api/stream/<id>?token=<o de arte>     → 401   // de propósito
+```
+
+**Quando usar o de arte, e não o de mídia:** sempre que a URL sair do processo
+do app e for buscada por outro. São dois casos conhecidos, e os dois já doeram:
+
+* a **fileira da home da Google TV** — o que se entrega ao `TvProvider` é uma
+  `Uri`, e quem a baixa é o launcher, dias depois, com o Odeon fechado;
+* a **capa da notificação de mídia** — quem baixa é o system UI, fora do
+  processo, e ele não tem como pedir um token novo quando o velho vence.
+
+Nos dois, um token de mídia dá o sintoma que o cliente relatou —
+`NotificationProvider: Failed to load bitmap` e retângulo vazio na home —
+porque ele vence em 8 horas.
+
+⚠️ **Não aposenta os anteriores.** O de mídia é podado por aparelho (R61); o de
+arte guarda os **cinco mais novos por pessoa** e derruba os velhos. Republicar a
+fileira a cada abertura do app é seguro: cinco cobre "algumas telas na casa" e
+ainda é teto.
+
+⚠️ **Um token de arte vazado não abre filme.** Ele é recusado em `/api/stream/`,
+em `/scrub/` e no barramento — conferido, 401 nos três. É esse estreitamento que
+paga o ano de validade.
+
+⚠️ **O que mata os dois:** trocar a senha. `POST /api/auth/password` apaga todos
+os tokens da conta, dos dois escopos — é o único gesto que revoga o de arte antes
+do ano.
+
 ---
 
 ## O estado deste repositório, medido em 04/08/2026

@@ -31,6 +31,26 @@ const SESSION_DAYS: i64 = 90;
 /// meio; mais desfaria a razão de a fase existir.
 const MEDIA_TOKEN_HOURS: i64 = 8;
 
+/// Um ano — o prazo do token de **arte** (R45).
+///
+/// Ele não mede reprodução, mede esquecimento: o caso que a fileira da home da
+/// Google TV precisa atender é o de quem passou um mês sem abrir o app e olha a
+/// primeira tela da TV. As oito horas do token de mídia existem porque aquele
+/// entrega o filme; este entrega pôster baixado do TMDB, e o que ele arrisca ao
+/// vazar é revelar que esta casa tem a capa de tal filme.
+///
+/// Finito de propósito: a linha vence e some sozinha, e é isso que separa um
+/// token longo de simplesmente deixar `/artwork` aberto.
+const ARTE_TOKEN_DIAS: i64 = 365;
+
+/// Quantos tokens de arte por pessoa sobrevivem à poda.
+///
+/// Não pode ser 1. Emitir um novo **não** pode derrubar o anterior: se
+/// derrubasse, a segunda TV da casa apagaria a fileira da primeira, e um
+/// aparelho republicando as URLs invalidaria as que ele mesmo acabou de
+/// publicar. Cinco cobre "algumas telas na casa" e ainda é um teto.
+const ARTE_TOKENS_POR_PESSOA: i64 = 5;
+
 /// Abaixo disto nem adianta ter Argon2.
 const MIN_PASSWORD_LEN: usize = 8;
 
@@ -131,14 +151,37 @@ pub async fn create_session(
     Ok(token)
 }
 
+/// O aparelho que abriu a requisição, pra quem precisa dele no handler.
+///
+/// Envelope de um `Uuid` porque vai nas `extensions` da requisição, e lá o tipo
+/// é a chave: um `Uuid` cru colidiria com qualquer outro que alguém puser.
+/// Ausente quando a requisição chegou por token de mídia ou de arte, que não
+/// pertencem a uma sessão.
+#[derive(Debug, Clone, Copy)]
+pub struct Sessao(pub Uuid);
+
+/// Quem pediu, e de qual aparelho.
+///
+/// O `sessao_id` entrou na R61: sem ele o servidor sabe *de quem* é a
+/// requisição e não *de onde*, e foi por isso que o token de mídia só sabia
+/// podar por conta — derrubando a TV quando o celular renovava. Vem junto na
+/// mesma consulta porque ela já lê a linha da sessão; perguntar de novo seria
+/// uma ida ao banco por requisição.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct Autenticado {
+    #[sqlx(flatten)]
+    pub user: User,
+    pub sessao_id: Uuid,
+}
+
 /// Resolve o token e renova o `last_seen_at`. Sessão expirada é apagada na hora
 /// em vez de esperar um job — a consulta já está aqui.
-pub async fn user_for_token(pool: &PgPool, token: &str) -> Option<User> {
+pub async fn user_for_token(pool: &PgPool, token: &str) -> Option<Autenticado> {
     let token_hash = hash_token(token);
 
-    let user: Option<User> = sqlx::query_as(
+    let user: Option<Autenticado> = sqlx::query_as(
         "SELECT u.id, u.username, u.display_name, u.role, u.is_active,
-                u.created_at, u.last_login_at
+                u.created_at, u.last_login_at, s.id AS sessao_id
          FROM auth_session s JOIN app_user u ON u.id = s.user_id
          WHERE s.token_hash = $1 AND s.expires_at > now() AND u.is_active",
     )
@@ -172,26 +215,97 @@ pub async fn user_for_token(pool: &PgPool, token: &str) -> Option<User> {
 // Até a R27 o que ia ali era o **token de sessão**: 90 dias, acesso total à
 // API. Agora vai um token que só abre mídia e vence em horas.
 
-/// Emite um token de mídia pra este usuário.
+/// Emite um token de mídia pra **este aparelho** (R61).
 ///
-/// **Aposenta os anteriores do mesmo usuário.** Um aparelho que pede um token
-/// novo é um aparelho que perdeu o antigo de vista; deixar os velhos vivos só
-/// aumentaria a janela de um vazamento sem servir a ninguém.
-pub async fn emitir_token_de_midia(pool: &PgPool, user_id: Uuid) -> Result<String, AppError> {
+/// **Aposenta o anterior do mesmo aparelho, e só dele.** Um aparelho que pede
+/// um token novo é um aparelho que perdeu o antigo de vista; deixar os velhos
+/// vivos só aumentaria a janela de um vazamento sem servir a ninguém. Mas isso
+/// vale pra ele, não pra casa: a poda era por conta, e com celular e TV
+/// abertos ao mesmo tempo um derrubava o outro no meio do filme.
+///
+/// `sessao` é `None` quando não deu pra saber qual aparelho pediu. Aí a poda
+/// alcança só os outros órfãos da mesma conta — nunca um token que tem dono.
+/// Sem sessão não há como distinguir dois aparelhos, e apagar o do vizinho por
+/// não saber de quem é seria o defeito de volta.
+pub async fn emitir_token_de_midia(
+    pool: &PgPool,
+    user_id: Uuid,
+    sessao: Option<Uuid>,
+) -> Result<String, AppError> {
     let token = generate_token();
     let mut tx = pool.begin().await?;
 
-    sqlx::query("DELETE FROM media_token WHERE user_id = $1 OR expira_em <= now()")
-        .bind(user_id)
-        .execute(&mut *tx)
-        .await?;
+    // **`escopo = 'midia'` na primeira metade, e ele é o ponto (R45).** Antes
+    // desta linha o `DELETE` levava tudo do usuário, e era isso que apagava a
+    // fileira da home da TV toda vez que alguém abria o app no celular: um
+    // aparelho pedindo bytes aposentava a credencial que outro tinha publicado
+    // no `TvProvider` e não tem como renovar.
+    //
+    // **`sessao_id IS NOT DISTINCT FROM $2` é a R61.** `IS NOT DISTINCT FROM`
+    // e não `=` porque os dois lados podem ser nulos e `NULL = NULL` não casa
+    // — órfão só aposenta órfão.
+    //
+    // A segunda metade continua sem escopo de propósito: varrer o que já venceu
+    // é limpeza, e não tem por que poupar arte vencida.
+    sqlx::query(
+        "DELETE FROM media_token
+         WHERE (user_id = $1 AND escopo = 'midia' AND sessao_id IS NOT DISTINCT FROM $2)
+            OR expira_em <= now()",
+    )
+    .bind(user_id)
+    .bind(sessao)
+    .execute(&mut *tx)
+    .await?;
 
-    sqlx::query("INSERT INTO media_token (token_hash, user_id, expira_em) VALUES ($1, $2, $3)")
-        .bind(hash_token(&token))
-        .bind(user_id)
-        .bind(Utc::now() + Duration::hours(MEDIA_TOKEN_HOURS))
-        .execute(&mut *tx)
-        .await?;
+    sqlx::query(
+        "INSERT INTO media_token (token_hash, user_id, expira_em, escopo, sessao_id)
+         VALUES ($1, $2, $3, 'midia', $4)",
+    )
+    .bind(hash_token(&token))
+    .bind(user_id)
+    .bind(Utc::now() + Duration::hours(MEDIA_TOKEN_HOURS))
+    .bind(sessao)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(token)
+}
+
+/// Emite um token de **arte** pra este aparelho (R45).
+///
+/// Ao contrário do de mídia, **não aposenta os anteriores** — ver
+/// `ARTE_TOKENS_POR_PESSOA`. O que ele faz é podar: passados os cinco mais
+/// novos, os velhos saem. Sem a poda, um app que republica a fileira a cada
+/// abertura acumularia uma linha por abertura até o vencimento.
+pub async fn emitir_token_de_arte(pool: &PgPool, user_id: Uuid) -> Result<String, AppError> {
+    let token = generate_token();
+    let mut tx = pool.begin().await?;
+
+    sqlx::query(
+        "INSERT INTO media_token (token_hash, user_id, expira_em, escopo)
+         VALUES ($1, $2, $3, 'arte')",
+    )
+    .bind(hash_token(&token))
+    .bind(user_id)
+    .bind(Utc::now() + Duration::days(ARTE_TOKEN_DIAS))
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query(
+        "DELETE FROM media_token
+         WHERE escopo = 'arte'
+           AND token_hash IN (
+               SELECT token_hash FROM media_token
+               WHERE user_id = $1 AND escopo = 'arte'
+               ORDER BY criado_em DESC
+               OFFSET $2
+           )",
+    )
+    .bind(user_id)
+    .bind(ARTE_TOKENS_POR_PESSOA)
+    .execute(&mut *tx)
+    .await?;
 
     tx.commit().await?;
     Ok(token)
@@ -202,11 +316,31 @@ pub async fn emitir_token_de_midia(pool: &PgPool, user_id: Uuid) -> Result<Strin
 /// A separação é a fase inteira: um token de sessão na query deixa de
 /// funcionar, e é isso que faz o vazamento em log parar de valer uma conta.
 pub async fn usuario_por_token_de_midia(pool: &PgPool, token: &str) -> Option<User> {
+    // `escopo = 'midia'` explícito: um token de arte dura um ano, e sem esta
+    // linha ele abriria `/api/stream/` — que é o filme inteiro (R45).
     sqlx::query_as(
         "SELECT u.id, u.username, u.display_name, u.role, u.is_active,
                 u.created_at, u.last_login_at
          FROM media_token m JOIN app_user u ON u.id = m.user_id
-         WHERE m.token_hash = $1 AND m.expira_em > now() AND u.is_active",
+         WHERE m.token_hash = $1 AND m.escopo = 'midia'
+           AND m.expira_em > now() AND u.is_active",
+    )
+    .bind(hash_token(token))
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
+/// Resolve um token **de arte** (R45). Só o middleware chama, e só em
+/// `/artwork/` — ver `aceita_token_de_arte`.
+pub async fn usuario_por_token_de_arte(pool: &PgPool, token: &str) -> Option<User> {
+    sqlx::query_as(
+        "SELECT u.id, u.username, u.display_name, u.role, u.is_active,
+                u.created_at, u.last_login_at
+         FROM media_token m JOIN app_user u ON u.id = m.user_id
+         WHERE m.token_hash = $1 AND m.escopo = 'arte'
+           AND m.expira_em > now() AND u.is_active",
     )
     .bind(hash_token(token))
     .fetch_optional(pool)
@@ -218,6 +352,11 @@ pub async fn usuario_por_token_de_midia(pool: &PgPool, token: &str) -> Option<Us
 /// Quanto tempo o token de mídia vale, pro cliente saber quando renovar.
 pub fn horas_do_token_de_midia() -> i64 {
     MEDIA_TOKEN_HOURS
+}
+
+/// Idem, pro de arte — em dias, que é a unidade em que ele faz sentido.
+pub fn dias_do_token_de_arte() -> i64 {
+    ARTE_TOKEN_DIAS
 }
 
 pub async fn revoke(pool: &PgPool, token: &str) {
@@ -240,7 +379,16 @@ pub async fn revoke(pool: &PgPool, token: &str) {
         .await;
 
     if let Some((user_id,)) = dono {
-        let _ = sqlx::query("DELETE FROM media_token WHERE user_id = $1")
+        // **Só a mídia (R45).** "Sair e continuar podendo puxar bytes por oito
+        // horas seria um sair que não sai" — e continua sendo, por isso o
+        // escopo de mídia morre aqui inteiro.
+        //
+        // A arte não: deslogar o notebook apagaria a fileira da home da TV, que
+        // é exatamente o defeito que a R45 veio consertar, e o mesmo raciocínio
+        // do `logout` ("deslogar o notebook não pode derrubar a TV") vale um
+        // nível abaixo. Quem quer derrubar a arte tem gesto próprio: trocar a
+        // senha, que é o que se faz quando se acha que alguém entrou.
+        let _ = sqlx::query("DELETE FROM media_token WHERE user_id = $1 AND escopo = 'midia'")
             .bind(user_id)
             .execute(pool)
             .await;

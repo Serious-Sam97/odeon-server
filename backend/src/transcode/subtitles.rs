@@ -103,8 +103,13 @@ pub fn descreve_arquivo(nome_arquivo: &str, stem_do_video: &str) -> (Option<Stri
         Some(i) => resto.trim_end_matches(i).trim_end_matches('.').trim().to_string(),
         None => resto.trim().to_string(),
     };
+    // Quando não sobra nada, o próprio idioma serve — mas dito, e não em
+    // código: `Filme.pt-BR.srt` vira "Português", não "pt-BR".
     let base = if sem_idioma.is_empty() {
-        idioma.clone().unwrap_or_else(|| "Legenda".into())
+        idioma
+            .as_deref()
+            .map(|i| crate::metadata::regiao::idioma_capitalizado(i).unwrap_or_else(|| i.to_string()))
+            .unwrap_or_else(|| "Legenda".into())
     } else {
         sem_idioma
     };
@@ -118,10 +123,17 @@ pub fn descreve_arquivo(nome_arquivo: &str, stem_do_video: &str) -> (Option<Stri
     (idioma, forcada, rotulo)
 }
 
+/// O idioma entra pelo nome, pelo mesmo motivo do `label_for` do áudio: o
+/// `language` do container é ISO 639-2 e ia cru pra tela (`eng`). Código fora
+/// da tabela cai nele mesmo.
 fn label_for(title: &Option<String>, language: &Option<String>, index: i32, forced: bool) -> String {
     let base = title
         .clone()
-        .or_else(|| language.clone())
+        .or_else(|| {
+            language.as_deref().map(|iso| {
+                crate::metadata::regiao::idioma_capitalizado(iso).unwrap_or_else(|| iso.to_string())
+            })
+        })
         .unwrap_or_else(|| format!("Faixa {}", index + 1));
     if forced {
         format!("{base} (forçada)")
@@ -335,9 +347,10 @@ mod tests {
             "1917.2019.1080p.BluRay.x264.AAC5.1-[YTS.MX].pt-BR.srt",
             "1917.2019.1080p.BluRay.x264.AAC5.1-[YTS.MX]",
         );
+        // O campo guarda o código do arquivo; o rótulo é o que a tela lê.
         assert_eq!(idioma.as_deref(), Some("pt-BR"));
         assert!(!forcada);
-        assert_eq!(rotulo, "pt-BR");
+        assert_eq!(rotulo, "Português");
     }
 
     #[test]
@@ -416,7 +429,7 @@ mod tests {
     fn rotulo_marca_forcada() {
         let tracks = from_probe(&probe());
         assert_eq!(tracks[0].label, "Português");
-        assert_eq!(tracks[1].label, "jpn (forçada)");
+        assert_eq!(tracks[1].label, "Japonês (forçada)");
     }
 
     #[test]

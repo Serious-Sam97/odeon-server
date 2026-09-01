@@ -343,7 +343,10 @@ impl From<Media> for Candidate {
             overview: m.description.map(|d| strip_html(&d)).filter(|d| !d.is_empty()),
             poster_url: m.cover_image.as_ref().and_then(|c| c.extra_large.clone()),
             backdrop_url: m.banner_image,
-            genres: m.genres,
+            // O AniList não tem catálogo traduzido: `genres` vem em inglês e
+            // criava um segundo vocabulário dentro do namespace `genre` —
+            // `Comedy` (43) ao lado de `Comédia` (3.228) no painel de filtros.
+            genres: m.genres.iter().map(|g| super::genero::em_portugues(g)).collect(),
             accent_color: m.cover_image.and_then(|c| c.color),
             // A escala de popularidade do AniList é bem maior que a do TMDB;
             // normaliza pra o bônus de desempate não dominar o score.

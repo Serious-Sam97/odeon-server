@@ -34,7 +34,12 @@ pub async fn start(
         ));
     }
 
-    let force = params.force;
+    // R74 — `alvo` manda; `force` continua valendo pra quem já o mandava.
+    let alvo = match params.alvo.as_deref() {
+        Some(pedido) => metadata::alvo_valido(Some(pedido)),
+        None if params.force => "tudo",
+        None => "novas",
+    };
     let pool = state.pool.clone();
     let providers = state.providers.clone();
     let artwork_dir = state.config.artwork_dir.clone();
@@ -45,7 +50,7 @@ pub async fn start(
     let job = crate::jobs::Job::start(
         &state.pool,
         "match",
-        json!({ "force": force }),
+        json!({ "alvo": alvo }),
         None,
     )
     .await;
@@ -53,7 +58,8 @@ pub async fn start(
 
     let bus = state.events.clone();
     tokio::spawn(async move {
-        metadata::run_matching(pool, providers, artwork_dir, status.clone(), force, job).await;
+        metadata::run_matching_kind(pool, providers, artwork_dir, status.clone(), alvo, job, None)
+            .await;
         let finished = status.lock().await.clone();
         crate::events::publish(
             &bus,
@@ -64,7 +70,14 @@ pub async fn start(
         );
     });
 
-    Ok(Json(json!({ "started": true, "force": force, "job_id": job_id })))
+    // `force` continua na resposta pra não quebrar quem já a lê; `alvo` é o
+    // que diz a verdade inteira agora.
+    Ok(Json(json!({
+        "started": true,
+        "alvo": alvo,
+        "force": alvo == "tudo",
+        "job_id": job_id
+    })))
 }
 
 /// Formato inalterado de propósito — quatro alvos de cliente leem isto.
@@ -113,6 +126,30 @@ pub async fn status(State(state): State<AppState>) -> Json<metadata::MatchStatus
     Json(current)
 }
 
+/// Ordenação por whitelist — mesmo padrão do `works::order_by`. Os nomes aqui
+/// são os da SAÍDA da subconsulta, sem prefixo de tabela, e o retorno é
+/// `&'static str`: literal escolhido no servidor, nunca texto do cliente.
+fn ordem_da_fila(sort: Option<&str>) -> &'static str {
+    match sort {
+        Some("confidence_asc") => "match_confidence ASC NULLS LAST",
+        Some("path") => "path ASC",
+        Some("recent") => "updated_at DESC",
+        // A ordenação da conferência: o que foi DECIDIDO por último primeiro.
+        //
+        // `matched_at` e não `updated_at`, e a diferença é o ponto inteiro.
+        // `updated_at` se move por assistir e por etiquetar — coisas que não
+        // são decisão —, então ordenar por ela misturaria "mexi nisto" com
+        // "decidi isto", que é justamente o que a conferência precisa separar.
+        //
+        // NULLS LAST porque nulo aqui quer dizer "identificada antes de alguém
+        // ler esta coluna": é a cauda mais velha, não a mais nova.
+        Some("matched_recent") => "matched_at DESC NULLS LAST",
+        // O padrão põe primeiro quem está mais perto do limiar: é o que se
+        // resolve com menos esforço, e faz a fila encolher mais rápido.
+        _ => "match_confidence DESC NULLS LAST",
+    }
+}
+
 /// A fila. Obras em que o matcher ficou em dúvida, com o que ele entendeu do
 /// nome do arquivo ao lado dos candidatos — pra decisão levar dois segundos.
 pub async fn review(
@@ -135,6 +172,8 @@ pub async fn review(
         match_reasons: Value,
         // `updated_at` é selecionada pra servir ao `sort=recent`, mas não é
         // lida em Rust — o sqlx ignora coluna que a struct não declara.
+        // `matched_at` é diferente: além de ordenar, ela VAI na resposta.
+        matched_at: Option<chrono::DateTime<chrono::Utc>>,
         filename: String,
         path: String,
         root_path: String,
@@ -150,16 +189,7 @@ pub async fn review(
         .filter(|s| !s.is_empty())
         .collect();
 
-    // Ordenação por whitelist — mesmo padrão do `works::order_by`. Os nomes
-    // aqui são os da SAÍDA da subconsulta, sem prefixo de tabela.
-    let order = match params.sort.as_deref() {
-        Some("confidence_asc") => "match_confidence ASC NULLS LAST",
-        Some("path") => "path ASC",
-        Some("recent") => "updated_at DESC",
-        // O padrão põe primeiro quem está mais perto do limiar: é o que se
-        // resolve com menos esforço, e faz a fila encolher mais rápido.
-        _ => "match_confidence DESC NULLS LAST",
-    };
+    let order = ordem_da_fila(params.sort.as_deref());
 
     let limit = params.limit.clamp(1, 200);
 
@@ -184,6 +214,7 @@ pub async fn review(
         SELECT DISTINCT ON (w.id)
             w.id, w.title, w.year, w.kind, w.season_number, w.episode_number,
             w.match_state, w.match_confidence, w.match_reasons, w.updated_at,
+            w.matched_at,
             m.filename, m.path, l.root_path, l.default_kind
         {filtro}
         ORDER BY w.id, m.size_bytes DESC
@@ -271,6 +302,7 @@ pub async fn review(
                     match_confidence: r.match_confidence,
                     match_reasons: r.match_reasons,
                     filename: r.filename,
+                    matched_at: r.matched_at,
                 },
             }
         })
@@ -1315,7 +1347,17 @@ pub async fn repair_series(
         .await?
     };
 
-    let orfaos = artwork_orfao(&state).await.unwrap_or((0, 0));
+    // ⚠️ Era `.unwrap_or((0, 0))` mudo, e isso escondeu o defeito por semanas:
+    // com a consulta quebrada, o reparo relatava `artwork_orfao: 0 arquivos`
+    // como se fosse contagem, e não como o erro que era. Zero por engano é
+    // pior que erro — ele passa por resposta (§8b).
+    let orfaos = match artwork_orfao(&state).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "contagem de artwork órfão falhou");
+            (0, 0)
+        }
+    };
 
     Ok(Json(json!({
         "dry_run": params.dry_run,
@@ -1339,9 +1381,26 @@ pub async fn repair_series(
 /// `programme.arte` entrou aqui junto com a arte da grade (§28). Sem esta
 /// linha, "limpar artwork órfão" apagaria a foto de todos os programas no ar —
 /// nenhum deles está em `work` nem em `collection`.
-const ARTWORK_VIVO: &str = "SELECT jsonb_each_text.value FROM work, jsonb_each_text(work.artwork)
+/// Todo caminho de arte que alguma linha do banco ainda referencia.
+///
+/// ⚠️ **`WHERE value IS NOT NULL` nas duas primeiras metades, e ele não é
+/// decoração** — R78. `jsonb_each_text` devolve a chave e o valor, e o valor
+/// pode ser um `null` de JSON: medido em 20/08/2026, **6 coleções** guardam
+/// `{"poster": null, "backdrop": null}`, gravadas pelo job de sagas quando o
+/// download da arte falhou. Sem o filtro, o `sqlx` tenta decodificar `NULL`
+/// num `String` e a rota inteira sai em **500**:
+///
+/// ```text
+/// error occurred while decoding column 0: unexpected null
+/// ```
+///
+/// Um `null` também **não é referência viva**: o arquivo que ele apontaria não
+/// existe. Filtrar é o que a consulta quis dizer desde sempre.
+const ARTWORK_VIVO: &str = "SELECT e.value FROM work, jsonb_each_text(work.artwork) e
+      WHERE e.value IS NOT NULL
      UNION
-     SELECT jsonb_each_text.value FROM collection, jsonb_each_text(collection.artwork)
+     SELECT e.value FROM collection, jsonb_each_text(collection.artwork) e
+      WHERE e.value IS NOT NULL
      UNION
      SELECT image_path FROM person WHERE image_path IS NOT NULL
      UNION
@@ -1421,4 +1480,66 @@ pub async fn limpar_artwork_orfao(
         "bytes": bytes,
         "gb": format!("{:.2}", bytes as f64 / 1e9),
     })))
+}
+
+#[cfg(test)]
+mod tests {
+    /// **R77 — a conferência ordena por `matched_at`, nunca por `updated_at`.**
+    ///
+    /// As duas colunas parecem intercambiáveis e não são. `updated_at` se move
+    /// por assistir, por etiquetar, por migração que reescreve `kind` — coisas
+    /// que não são decisão. Ordenar por ela misturaria "mexi nisto" com "decidi
+    /// isto", que é exatamente a distinção que a tela de conferência existe pra
+    /// fazer.
+    ///
+    /// Hoje as duas dariam a mesma ordem, porque nenhuma obra identificada foi
+    /// tocada depois. É por isso que isto é teste e não medição: o defeito
+    /// aparece só quando alguém assistir, e aí ninguém vai lembrar.
+    #[test]
+    fn a_conferencia_ordena_por_matched_at_e_nao_por_updated_at() {
+        let ordem = super::ordem_da_fila(Some("matched_recent"));
+        assert_eq!(ordem, "matched_at DESC NULLS LAST");
+        assert!(
+            !ordem.contains("updated_at"),
+            "matched_recent voltou a ordenar por updated_at"
+        );
+        assert_eq!(super::ordem_da_fila(Some("recent")), "updated_at DESC");
+    }
+
+    /// **O padrão da fila não pode mudar.** Sem `sort`, primeiro quem está mais
+    /// perto do limiar: é o que se resolve com menos esforço.
+    #[test]
+    fn sort_ausente_ou_torto_e_a_fila_de_sempre() {
+        assert_eq!(super::ordem_da_fila(None), "match_confidence DESC NULLS LAST");
+        assert_eq!(super::ordem_da_fila(Some("")), "match_confidence DESC NULLS LAST");
+        assert_eq!(
+            super::ordem_da_fila(Some("matched_recentt")),
+            "match_confidence DESC NULLS LAST"
+        );
+    }
+
+    /// **`state` não tem lista branca, e é de propósito.**
+    ///
+    /// `auto,confirmed` é a consulta inteira da conferência. Uma lista branca
+    /// que só aceitasse `needs_review`/`unmatched` recriaria a porta de mão
+    /// única: identificar tirava a obra da tela e nada a trazia de volta.
+    #[test]
+    fn state_aceita_qualquer_match_state() {
+        let fonte = include_str!("metadata.rs");
+        let corpo = fonte
+            .split_once("pub async fn review")
+            .expect("review sumiu")
+            .1
+            .split_once("let order =")
+            .expect("o corpo de review mudou de forma")
+            .0;
+        assert!(
+            corpo.contains("unwrap_or(\"needs_review\")"),
+            "o padrao de state mudou"
+        );
+        assert!(
+            !corpo.contains("matches!("),
+            "apareceu lista branca em state — a conferencia perde auto/confirmed"
+        );
+    }
 }

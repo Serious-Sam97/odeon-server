@@ -60,10 +60,23 @@ fn candidates() -> Vec<Encoder> {
             input_args: vec![],
             // p4 = equilíbrio; vbr com cq deixa a qualidade constante e o
             // bitrate variar, que é o certo pra biblioteca heterogênea.
+            //
+            // `-forced-idr 1` (R58) é o que faz o `-force_key_frames` do
+            // `build_args` valer alguma coisa aqui. Sem ele o NVENC atende o
+            // pedido com um **I-frame comum**, que não é ponto de entrada — o
+            // segmentador do HLS só corta em IDR, então ignorava as marcas e
+            // seguia o GOP do encoder. Medido em 17/08/2026, no mesmo clipe de
+            // 60 s: sem a opção, 6 segmentos de 10,000 s; com ela, 15 de
+            // 4,000 s, que é o `SEGMENT_SECONDS` pedido.
+            //
+            // O sintoma não era erro nenhum: só ~10 s pra o vídeo começar e um
+            // seek grosseiro. É específico do NVENC — o `libx264` já obedece —
+            // e por isso mora no encoder, não no `build_args`.
             output_args: vec![
                 "-preset".into(), "p4".into(),
                 "-rc".into(), "vbr".into(),
                 "-cq".into(), "23".into(),
+                "-forced-idr".into(), "1".into(),
             ],
         },
         Encoder {
@@ -222,6 +235,17 @@ mod tests {
         assert!(all[..all.len() - 1]
             .iter()
             .all(|e| e.kind == EncoderKind::Hardware));
+    }
+
+    /// Sem `-forced-idr`, o `-force_key_frames` que o `build_args` manda é
+    /// atendido com I-frame comum e o segmentador do HLS o ignora.
+    #[test]
+    fn o_nvenc_forca_idr_de_verdade() {
+        let nvenc = candidates()
+            .into_iter()
+            .find(|e| e.name == "h264_nvenc")
+            .unwrap();
+        assert!(nvenc.output_args.iter().any(|a| a == "-forced-idr"));
     }
 
     #[test]

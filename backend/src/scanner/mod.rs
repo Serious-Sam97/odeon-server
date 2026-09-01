@@ -13,8 +13,37 @@ use walkdir::WalkDir;
 
 use crate::models::Library;
 
+/// O que conta como vídeo — **R73**.
+///
+/// A lista original foi escrita no M0 e nunca revista. Comparada com o
+/// Jellyfin da mesma casa, em 20/08/2026, sobre os mesmos três discos:
+///
+/// | | |
+/// |---|---|
+/// | arquivos que os dois enxergam | 16.938 |
+/// | **só o Jellyfin enxergava** | **693** |
+/// | só o Odeon enxerga | 1.065 (extras que o Jellyfin classifica à parte) |
+///
+/// E os 693 não eram mistério nenhum — 677 `.rmvb`, 7 `.divx`, 1 `.asf`, e 8
+/// caminhos que **já não existem no disco** (o Jellyfin é que estava
+/// desatualizado; o Odeon estava certo). Ou seja: a diferença inteira era
+/// extensão faltando.
+///
+/// `.rmvb` é a maior fatia sozinha e é conteúdo de verdade — conferido no
+/// ffprobe: `rv40` + `cook`, 1.300 s, uma temporada de *Uma Família da
+/// Pesada*. Nenhum cliente decodifica RealMedia, mas isso é assunto do
+/// `decide`, que já sabe recodificar o que não toca. **Não descobrir é a única
+/// falha irreparável do pipeline** — o que não entra aqui não existe pro resto
+/// do produto.
+///
+/// ⚠️ **O que ficou de fora, e de propósito**: `.mp3` (1.685) e `.flac`
+/// (1.213) são música, e este servidor não é de música; `.mca` (65) e `.dat`
+/// (42) são mundo de Minecraft. Conferido arquivo a arquivo no disco — não há
+/// mais nenhuma extensão de vídeo acima de 1 MB fora desta lista.
 const VIDEO_EXTS: &[&str] = &[
     "mkv", "mp4", "avi", "mov", "m4v", "webm", "ts", "m2ts", "mpg", "mpeg", "wmv", "flv", "ogv",
+    // R73 — a leva que o Jellyfin via e nós não.
+    "rmvb", "rm", "divx", "m2v", "asf",
 ];
 
 /// Abaixo disso é sample, trailer ou thumbnail — não é obra.
@@ -44,10 +73,15 @@ enum Outcome {
 
 /// Varre todas as bibliotecas. Só roda uma por vez; chamada concorrente é no-op.
 /// Devolve `false` se já havia um scan em andamento.
-pub async fn scan_all(
+/// Varre as bibliotecas. `apenas` limita ao `default_kind` pedido — R73.
+///
+/// `None` varre tudo, que é o comportamento de sempre e o que o `/api/scan`
+/// sem `tipo=` continua fazendo.
+pub async fn scan_kind(
     pool: PgPool,
     status: SharedStatus,
     job: Option<crate::jobs::Job>,
+    apenas: Option<&str>,
 ) -> bool {
     {
         let mut s = status.lock().await;
@@ -63,9 +97,14 @@ pub async fn scan_all(
 
     let started_at = Utc::now();
 
-    let libraries: Vec<Library> = match sqlx::query_as("SELECT * FROM library ORDER BY created_at")
-        .fetch_all(&pool)
-        .await
+    let libraries: Vec<Library> = match sqlx::query_as(
+        "SELECT * FROM library
+          WHERE $1::text IS NULL OR default_kind = $1
+          ORDER BY created_at",
+    )
+    .bind(apenas)
+    .fetch_all(&pool)
+    .await
     {
         Ok(l) => l,
         Err(e) => {
@@ -351,5 +390,16 @@ async fn create_work(
     .bind(duration_seconds.map(|d| d.round() as i32))
     .fetch_one(pool)
     .await?;
+
+    // R64 — o formato nasce aqui, e não na identificação.
+    //
+    // Ele era escrito só no `apply_candidate`, então 7.376 entradas do acervo
+    // não tinham nenhum e sumiam de toda prateleira. Mas "é um filme" e "é
+    // *este* filme" são perguntas diferentes: a primeira o `kind` acima já
+    // responde, de graça e sem rede. A identificação ainda refina — `anime` só
+    // ela sabe — e por isso ela substitui em vez de acrescentar.
+    let kind = guess.kind(&library.default_kind);
+    crate::metadata::formato::gravar_do_kind(pool, id, &kind).await;
+
     Ok(id)
 }

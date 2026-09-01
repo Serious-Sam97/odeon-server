@@ -23,6 +23,10 @@ pub struct Tmdb {
     /// O TMDB devolve gênero como id numérico. O dicionário id→nome é fixo e
     /// pequeno: busca uma vez e guarda pelo resto do processo.
     genres: Arc<RwLock<HashMap<i64, String>>>,
+    /// Quantas temporadas tem cada série, por id (R72). Mesmo espírito do
+    /// `genres`: o número não muda durante uma varredura, e sem cache um
+    /// desempate custaria uma chamada por arquivo — 485 no caso que o pediu.
+    temporadas: Arc<RwLock<HashMap<String, Option<i32>>>>,
 }
 
 #[derive(Clone)]
@@ -45,6 +49,7 @@ impl Tmdb {
             http,
             credential,
             genres: Arc::new(RwLock::new(HashMap::new())),
+            temporadas: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -238,6 +243,30 @@ impl Tmdb {
         let hit: TvHit = self.get(&format!("/tv/{id}"), &[]).await?;
         let genres = self.genre_map().await;
         Ok(hit.into_candidate(&genres))
+    }
+
+    /// **Quantas temporadas a série tem** — o desempate da R72.
+    ///
+    /// Ignora a temporada 0: no TMDB ela é a dos especiais, e "tem especiais"
+    /// não diz nada sobre até onde a série foi.
+    ///
+    /// `None` quando a chamada falha ou a série não lista temporada nenhuma —
+    /// e `None` **não desempata**, pelo mesmo motivo de sempre: não saber não
+    /// é evidência.
+    pub async fn maior_temporada(&self, series_id: &str) -> Option<i32> {
+        if let Some(guardado) = self.temporadas.read().await.get(series_id) {
+            return *guardado;
+        }
+        let maior = self
+            .series_seasons(series_id)
+            .await
+            .ok()
+            .and_then(|t| t.iter().map(|s| s.season_number).filter(|n| *n > 0).max());
+        self.temporadas
+            .write()
+            .await
+            .insert(series_id.to_string(), maior);
+        maior
     }
 
     /// As temporadas da série, com quantos episódios cada uma tem.
@@ -469,6 +498,16 @@ pub struct SeasonSummary {
     pub season_number: i32,
     #[serde(default)]
     pub episode_count: i32,
+    /// R63 — a ficha da temporada, que vem **na mesma resposta** de `/tv/{id}`.
+    ///
+    /// É por isso que o job de temporadas custa uma chamada por *série* e não
+    /// por temporada: 120 contra 473 neste acervo. O `/tv/{id}/season/{n}`
+    /// existe e traz o mesmo `poster_path` — pedir lá seria pagar quatro vezes
+    /// pelo que já está aqui.
+    pub name: Option<String>,
+    pub overview: Option<String>,
+    pub poster_path: Option<String>,
+    pub air_date: Option<String>,
 }
 
 /// "2017-10-04" → 2017

@@ -227,10 +227,19 @@ async fn escolher(
         }
         "decada" => {
             let tema: Option<(i32,)> = sqlx::query_as(
+                // A conta vai por extenso no `ORDER BY`, e não o apelido `d`.
+                //
+                // O Postgres aceita apelido de saída no `GROUP BY` e sozinho no
+                // `ORDER BY`, mas **não dentro de uma expressão** — e
+                // `md5($2 || d::text)` é expressão. O eixo "década" respondia
+                // 500 (`column "d" does not exist`) desde sempre, a cada 10
+                // segundos no log, porque o erro nunca chegou na tela: a capa
+                // sorteia outro eixo e segue. Os eixos irmãos (`genero`,
+                // `pais`) sempre repetiram a coluna, e por isso funcionavam.
                 "SELECT (w.year / 10) * 10 AS d FROM work w
                  WHERE w.kind = 'movie' AND w.year IS NOT NULL AND w.artwork ? 'poster'
-                 GROUP BY d HAVING count(*) >= $1
-                 ORDER BY md5($2 || d::text) LIMIT 1",
+                 GROUP BY (w.year / 10) * 10 HAVING count(*) >= $1
+                 ORDER BY md5($2 || (((w.year / 10) * 10)::text)) LIMIT 1",
             )
             .bind(MINIMO)
             .bind(semente)

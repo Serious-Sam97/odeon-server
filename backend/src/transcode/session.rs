@@ -39,6 +39,10 @@ const PLAYLIST_TIMEOUT: Duration = Duration::from_secs(25);
 
 pub const PLAYLIST_NAME: &str = "index.m3u8";
 
+/// O segmento de inicialização do fMP4 (R66). O ffmpeg o escreve no diretório
+/// da sessão e o anuncia na playlist como `#EXT-X-MAP:URI="init.mp4"`.
+pub const INIT_NAME: &str = "init.mp4";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionInfo {
     pub id: Uuid,
@@ -115,12 +119,13 @@ impl SessionManager {
         plan: PlaybackPlan,
         start_seconds: f64,
         dono: Uuid,
+        video_codec: Option<&str>,
     ) -> anyhow::Result<SessionInfo> {
         let id = Uuid::new_v4();
         let dir = self.root.join(id.to_string());
         tokio::fs::create_dir_all(&dir).await?;
 
-        let args = self.build_args(source, &dir, &plan, start_seconds);
+        let args = self.build_args(source, &dir, &plan, start_seconds, video_codec);
         tracing::info!(%id, ?args, "iniciando transcode");
 
         let child = Command::new("ffmpeg")
@@ -206,6 +211,9 @@ impl SessionManager {
                 audio: StreamAction::Copy,
                 target_height: None,
                 burn_subtitle: None,
+                // Ao vivo não há escolha de faixa: o `build_live_args` mapeia
+                // `0:a:0?` e o provedor entrega uma faixa só.
+                audio_track: None,
                 reasons: vec![
                     "canal ao vivo: o provedor entrega MPEG-TS, que navegador nenhum toca"
                         .into(),
@@ -279,13 +287,110 @@ impl SessionManager {
         args
     }
 
+    /// O filtro que reinsere os parâmetros do codec a cada keyframe (R50).
+    ///
+    /// ## O defeito, medido
+    ///
+    /// Num remux de mkv pra MPEG-TS com `-c:v copy`, os segmentos depois do
+    /// primeiro saíam **sem SPS/PPS**. Medido nesta casa, na sessão do 007
+    /// pt-BR: `seg00000` com 14 ocorrências, `seg00001` em diante com **zero**,
+    /// e `ffmpeg` acusando `non-existing PPS 0 referenced` ao abrir cada um
+    /// deles sozinho.
+    ///
+    /// O mkv guarda os parâmetros **fora de banda** (no `CodecPrivate`), e é o
+    /// `*_mp4toannexb` que os traz pro fluxo. O ffmpeg 5.1 insere esse filtro
+    /// sozinho no muxer de TS, mas — medido — só no começo do fluxo. Explícito,
+    /// ele passa a inserir em cada segmento:
+    ///
+    /// | variante | seg0 | seg1 | seg2 |
+    /// |---|---|---|---|
+    /// | como estava | 2 SPS | **0** | **0** |
+    /// | `-bsf:v h264_mp4toannexb` | 2 SPS | 2 SPS | 2 SPS |
+    /// | `-mpegts_flags +resend_headers` | 2 SPS | **0** | **0** |
+    ///
+    /// ## Por quem isto passava despercebido
+    ///
+    /// O ExoPlayer guarda os parâmetros do primeiro segmento e segue tocando; o
+    /// `AVPlayer` trata cada segmento como independente — que é o que a playlist
+    /// manda fazer, com `#EXT-X-INDEPENDENT-SEGMENTS`. O sintoma no iOS era o
+    /// pior tipo: centenas de MB baixados, nada bufferizado, **nenhum erro**.
+    ///
+    /// ## Por que por codec, e não sempre
+    ///
+    /// Aplicar o filtro errado **não degrada: mata**. Medido —
+    /// `h264_mp4toannexb` num fluxo HEVC responde *"Codec 'hevc' is not
+    /// supported by the bitstream filter"* e o ffmpeg nem inicia.
+    ///
+    /// E o HEVC do acervo não sofria do defeito: o x265 repete os parâmetros a
+    /// cada keyframe por padrão, o x264 não. Mesmo assim o `hevc_mp4toannexb`
+    /// entra — o filtro é idempotente (não duplica o que já está lá), e
+    /// depender do padrão do encoder que gerou cada arquivo seria apostar num
+    /// acervo que ninguém controla.
+    fn bsf_annexb(video_codec: Option<&str>) -> Option<&'static str> {
+        match video_codec.map(crate::transcode::decide::codec_static) {
+            Some("h264") => Some("h264_mp4toannexb"),
+            Some("hevc") => Some("hevc_mp4toannexb"),
+            // AV1, VP9 e companhia não têm (nem precisam de) equivalente, e
+            // MPEG-TS não os carrega. Sem filtro é a resposta certa.
+            _ => None,
+        }
+    }
+
+    /// **HEVC não vai em MPEG-TS** (R66).
+    ///
+    /// A *HLS Authoring Specification* da Apple é explícita: HEVC só é
+    /// transportado em **fMP4**. MPEG-TS carrega HEVC pela norma do MPEG
+    /// (`stream_type` 0x24), e o ffmpeg escreve isso sem reclamar — mas HLS
+    /// nunca aceitou essa combinação, e é por isso que o `AVPlayer` não toca
+    /// **nenhum** dos 5.374 arquivos HEVC deste acervo por essa via.
+    ///
+    /// ## O que foi medido, 18/08/2026, antes de mudar
+    ///
+    /// O relato era "nenhuma série toca, só tela preta", com o extrator do
+    /// ExoPlayer repetindo `Unexpected start code prefix: 3211403 · 2162915 ·
+    /// 3211491`. O segmento foi auditado byte a byte e **não tem defeito**:
+    ///
+    /// | conferido | resultado |
+    /// |---|---|
+    /// | bytes servidos × bytes em disco | idênticos |
+    /// | `0x47` a cada 188, tamanho múltiplo de 188 | sim |
+    /// | PAT/PMT | `0x24` HEVC com descritor `HEVC`, `0x0f` AAC |
+    /// | pacotes com `payload_unit_start` que iniciam um PES | 192/192 e 73/73 |
+    /// | quebras de `continuity_counter` | zero |
+    /// | VPS/SPS/PPS por segmento | 8, 4, 4 |
+    /// | decodificar o segmento sozinho | ffmpeg decodifica |
+    ///
+    /// E os três números do log do cliente são, em hexa, `0x31000B`,
+    /// `0x210023` e `0x310063` — **exatamente os bytes do campo PTS** dos
+    /// nossos PES (`31 00 …` no vídeo, `21 00 …` no áudio), que ficam no
+    /// deslocamento 9. Ou seja: o parser dele recomeça a leitura 9 bytes
+    /// adiante, num fluxo que está correto. Não há byte a consertar; há um
+    /// contêiner a trocar.
+    ///
+    /// ## Por que só o HEVC muda
+    ///
+    /// H.264 em TS é a combinação mais antiga e mais testada do HLS, e é o que
+    /// toca hoje — 887 dos 942 filmes. Trocar o contêiner dele seria mexer no
+    /// que funciona pra consertar o que não funciona.
+    ///
+    /// ⚠️ E o `hevc_mp4toannexb` da R50 **sai** junto: ele existe pra pôr os
+    /// NAL em Annex B, que é o que o TS quer. O fMP4 quer o contrário — NAL com
+    /// prefixo de comprimento, e os parâmetros no segmento de inicialização.
+    /// Aplicar o filtro aqui corromperia cada segmento.
+    fn segmento_fmp4(plan: &PlaybackPlan, video_codec: Option<&str>) -> bool {
+        plan.video == StreamAction::Copy
+            && video_codec.map(crate::transcode::decide::codec_static) == Some("hevc")
+    }
+
     fn build_args(
         &self,
         source: &Path,
         dir: &Path,
         plan: &PlaybackPlan,
         start_seconds: f64,
+        video_codec: Option<&str>,
     ) -> Vec<String> {
+        let fmp4 = Self::segmento_fmp4(plan, video_codec);
         let mut args: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "error".into()];
 
         // Só inicializa device de hardware quando o vídeo vai ser recodificado.
@@ -310,6 +415,15 @@ impl SessionManager {
             StreamAction::Copy => {
                 args.push("-c:v".into());
                 args.push("copy".into());
+                // R50 — os parâmetros voltam em cada segmento. **Só no TS**:
+                // em fMP4 eles moram no `init.mp4` e o Annex B corromperia o
+                // segmento (R66).
+                if !fmp4 {
+                    if let Some(bsf) = Self::bsf_annexb(video_codec) {
+                        args.push("-bsf:v".into());
+                        args.push(bsf.into());
+                    }
+                }
             }
             StreamAction::Encode => {
                 let mut filters: Vec<String> = Vec::new();
@@ -338,6 +452,31 @@ impl SessionManager {
                 args.push("-c:v".into());
                 args.push(self.encoder.name.to_string());
                 args.extend(self.encoder.output_args.clone());
+                // Sai sempre em 8 bits (R58).
+                //
+                // **5.094 arquivos do acervo são 10 bits** — 5.060 hevc Main 10
+                // e 34 h264 — e nenhum deles conseguia abrir sessão quando o
+                // plano pedia recodificação de vídeo. O NVENC de H.264 não
+                // codifica 10 bits (é limitação do H.264 no hardware, não do
+                // ffmpeg), e a mensagem que ele dá esconde isso:
+                //
+                //     [h264_nvenc] No capable devices found
+                //
+                // Parece GPU ausente. Não é: o `nvidia-smi` lista a RTX 2060 e
+                // um `testsrc` codifica na hora. O que falha é a checagem de
+                // capacidade *por formato de pixel*, feita device a device — e
+                // quando nenhum passa, o ffmpeg reporta como se não houvesse
+                // device nenhum. Foi o que fez a caça começar pelo lado errado.
+                //
+                // O cliente via só `400 — a sessão não produziu playlist a
+                // tempo`, 25 segundos depois de mandar tocar.
+                //
+                // Em fonte de 8 bits isto não faz nada, e é por isso que é
+                // incondicional: o `libx264` aceitaria 10 bits, mas aí sairia
+                // um High 10 que quase nenhum cliente decodifica — trocaria uma
+                // sessão que não abre por uma que abre e não toca.
+                args.push("-pix_fmt".into());
+                args.push("yuv420p".into());
                 // Keyframe a cada segmento: sem isto o segmentador do HLS
                 // produz pedaços de duração irregular e o seek fica torto.
                 args.push("-force_key_frames".into());
@@ -346,8 +485,15 @@ impl SessionManager {
         }
 
         // --- áudio ---
+        //
+        // A faixa vem do plano. Era `0:a:0?` fixo, e num arquivo dual audio isso
+        // punha uma faixa só na playlist — o player oferece o que está na
+        // playlist, não o que está no arquivo, então o botão de áudio não tinha
+        // o que mostrar. O `?` continua tolerando arquivo mudo; o índice já foi
+        // conferido contra o arquivo em `audio::escolher`, então ele não é um
+        // caminho pra sessão silenciosa.
         args.push("-map".into());
-        args.push("0:a:0?".into()); // o `?` tolera arquivo sem faixa de áudio
+        args.push(format!("0:a:{}?", plan.audio_track.unwrap_or(0)));
         match plan.audio {
             StreamAction::Copy => {
                 args.push("-c:a".into());
@@ -377,12 +523,40 @@ impl SessionManager {
                 "event",
                 "-hls_flags",
                 "independent_segments",
-                "-hls_segment_filename",
             ]
             .iter()
             .map(|s| s.to_string()),
         );
-        args.push(dir.join("seg%05d.ts").to_string_lossy().to_string());
+
+        // R66 — o contêiner do segmento. `init.mp4` guarda os parâmetros do
+        // codec uma vez, e a playlist o anuncia num `#EXT-X-MAP`.
+        if fmp4 {
+            args.extend(
+                [
+                    "-hls_segment_type",
+                    "fmp4",
+                    "-hls_fmp4_init_filename",
+                    INIT_NAME,
+                    // ⚠️ `hvc1`, e não o `hev1` que o ffmpeg escolhe sozinho.
+                    //
+                    // São os dois nomes da mesma amostra de HEVC no MP4, e a
+                    // diferença é onde os parâmetros do codec podem estar:
+                    // `hev1` os aceita dentro do fluxo, `hvc1` exige que
+                    // estejam na descrição da amostra — ou seja, no `init.mp4`.
+                    // A especificação de HLS da Apple **só admite `hvc1`**, e o
+                    // `AVPlayer` recusa o outro. Medido aqui: sem esta linha o
+                    // segmento sai com `codec_tag_string=hev1`.
+                    "-tag:v",
+                    "hvc1",
+                ]
+                .iter()
+                .map(|s| s.to_string()),
+            );
+        }
+
+        args.push("-hls_segment_filename".into());
+        let padrao = if fmp4 { "seg%05d.m4s" } else { "seg%05d.ts" };
+        args.push(dir.join(padrao).to_string_lossy().to_string());
         args.push(dir.join(PLAYLIST_NAME).to_string_lossy().to_string());
 
         args
@@ -467,8 +641,174 @@ mod tests {
             audio,
             target_height: None,
             burn_subtitle: None,
+            audio_track: None,
             reasons: vec![],
         }
+    }
+
+    /// **A R50.** Sem isto, todo segmento depois do primeiro sai sem SPS/PPS e
+    /// o `AVPlayer` baixa centenas de MB sem bufferizar nada — sem erro.
+    #[test]
+    fn o_remux_reinsere_os_parametros_em_cada_segmento() {
+        let args = manager()
+            .build_args(
+                Path::new("/media/f.mkv"),
+                Path::new("/cache/s"),
+                &plan(StreamAction::Copy, StreamAction::Copy),
+                0.0,
+                Some("h264"),
+            )
+            .join(" ");
+        assert!(args.contains("-bsf:v h264_mp4toannexb"), "veio {args}");
+    }
+
+    /// **A R66.** HEVC em MPEG-TS não é HLS válido, e era o que a sessão de
+    /// toda série produzia — o extrator do ExoPlayer não formava um quadro e o
+    /// player ficava em `BUFFERING` pra sempre, sem erro.
+    #[test]
+    fn hevc_copiado_sai_em_fmp4() {
+        let args = manager()
+            .build_args(
+                Path::new("/media/f.mkv"),
+                Path::new("/cache/s"),
+                &plan(StreamAction::Copy, StreamAction::Encode),
+                0.0,
+                Some("hevc"),
+            )
+            .join(" ");
+        assert!(args.contains("-hls_segment_type fmp4"), "veio {args}");
+        assert!(args.contains("init.mp4"), "veio {args}");
+        assert!(args.contains("seg%05d.m4s"), "veio {args}");
+        // A especificação de HLS só admite `hvc1`; o padrão do ffmpeg é `hev1`.
+        assert!(args.contains("-tag:v hvc1"), "veio {args}");
+    }
+
+    /// ⚠️ O Annex B é do TS. Em fMP4 ele corromperia cada segmento — os
+    /// parâmetros moram no `init.mp4` e os NAL vão com prefixo de comprimento.
+    #[test]
+    fn fmp4_nao_leva_o_filtro_annexb() {
+        let args = manager()
+            .build_args(
+                Path::new("/media/f.mkv"),
+                Path::new("/cache/s"),
+                &plan(StreamAction::Copy, StreamAction::Encode),
+                0.0,
+                Some("hevc"),
+            )
+            .join(" ");
+        assert!(!args.contains("-bsf:v"), "veio {args}");
+    }
+
+    /// H.264 em TS é a combinação mais testada do HLS e é a que toca hoje.
+    /// Trocar o contêiner dela seria mexer no que funciona.
+    #[test]
+    fn h264_continua_em_mpegts_com_annexb() {
+        let args = manager()
+            .build_args(
+                Path::new("/media/f.mkv"),
+                Path::new("/cache/s"),
+                &plan(StreamAction::Copy, StreamAction::Copy),
+                0.0,
+                Some("h264"),
+            )
+            .join(" ");
+        assert!(!args.contains("fmp4"), "veio {args}");
+        assert!(args.contains("seg%05d.ts"), "veio {args}");
+        assert!(args.contains("-bsf:v h264_mp4toannexb"), "veio {args}");
+    }
+
+    /// Recodificar sempre sai em H.264 — o encoder é `h264_*` —, então o TS
+    /// vale mesmo quando a **fonte** é HEVC.
+    #[test]
+    fn recodificar_hevc_sai_em_ts_porque_o_destino_e_h264() {
+        let args = manager()
+            .build_args(
+                Path::new("/media/f.mkv"),
+                Path::new("/cache/s"),
+                &plan(StreamAction::Encode, StreamAction::Encode),
+                0.0,
+                Some("hevc"),
+            )
+            .join(" ");
+        assert!(!args.contains("fmp4"), "veio {args}");
+        assert!(args.contains("seg%05d.ts"), "veio {args}");
+    }
+
+    /// **A R58.** 5.094 arquivos do acervo são 10 bits, e o NVENC de H.264 não
+    /// codifica 10 bits — a sessão morria antes da primeira playlist, com uma
+    /// mensagem que culpa a GPU (`No capable devices found`).
+    #[test]
+    fn recodificar_sai_em_8_bits() {
+        let args = manager()
+            .build_args(
+                Path::new("/media/f.mkv"),
+                Path::new("/cache/s"),
+                &plan(StreamAction::Encode, StreamAction::Encode),
+                0.0,
+                Some("hevc"),
+            )
+            .join(" ");
+        assert!(args.contains("-pix_fmt yuv420p"), "veio {args}");
+    }
+
+    /// Copiar é copiar: mexer no formato de pixel de um fluxo que não vai ser
+    /// decodificado faria o ffmpeg recusar a sessão inteira.
+    #[test]
+    fn copiar_nao_declara_formato_de_pixel() {
+        let args = manager()
+            .build_args(
+                Path::new("/media/f.mkv"),
+                Path::new("/cache/s"),
+                &plan(StreamAction::Copy, StreamAction::Encode),
+                0.0,
+                Some("hevc"),
+            )
+            .join(" ");
+        assert!(!args.contains("-pix_fmt"), "veio {args}");
+    }
+
+    /// O filtro é escolhido pelo codec da fonte. **Errar aqui não degrada:
+    /// mata** — `h264_mp4toannexb` num fluxo HEVC impede o ffmpeg de iniciar.
+    #[test]
+    fn o_filtro_segue_o_codec_da_fonte() {
+        assert_eq!(
+            SessionManager::bsf_annexb(Some("hevc")),
+            Some("hevc_mp4toannexb")
+        );
+        assert_eq!(
+            SessionManager::bsf_annexb(Some("h264")),
+            Some("h264_mp4toannexb")
+        );
+        // apelidos que o `codec_static` normaliza
+        assert_eq!(
+            SessionManager::bsf_annexb(Some("avc1")),
+            Some("h264_mp4toannexb")
+        );
+        assert_eq!(
+            SessionManager::bsf_annexb(Some("h265")),
+            Some("hevc_mp4toannexb")
+        );
+        // e o que não tem equivalente fica sem filtro, em vez de ganhar um errado
+        for codec in ["av1", "vp9", "mpeg2video", "desconhecido"] {
+            assert_eq!(SessionManager::bsf_annexb(Some(codec)), None, "{codec}");
+        }
+        assert_eq!(SessionManager::bsf_annexb(None), None);
+    }
+
+    /// Quando o vídeo é **recodificado**, o encoder já entrega annexb — pôr o
+    /// filtro ali seria trabalho a mais no melhor caso e erro no pior.
+    #[test]
+    fn quem_recodifica_nao_leva_o_filtro() {
+        let args = manager()
+            .build_args(
+                Path::new("/media/f.mkv"),
+                Path::new("/cache/s"),
+                &plan(StreamAction::Encode, StreamAction::Copy),
+                0.0,
+                Some("h264"),
+            )
+            .join(" ");
+        assert!(!args.contains("mp4toannexb"), "veio {args}");
     }
 
     #[test]
@@ -478,6 +818,8 @@ mod tests {
             Path::new("/cache/s"),
             &plan(StreamAction::Copy, StreamAction::Copy),
             0.0,
+        
+            Some("h264"),
         );
         let joined = args.join(" ");
         assert!(joined.contains("-c:v copy"));
@@ -492,6 +834,8 @@ mod tests {
             Path::new("/cache/s"),
             &plan(StreamAction::Copy, StreamAction::Copy),
             42.5,
+        
+            Some("h264"),
         );
         let ss = args.iter().position(|a| a == "-ss").unwrap();
         let input = args.iter().position(|a| a == "-i").unwrap();
@@ -507,6 +851,8 @@ mod tests {
             Path::new("/cache/s"),
             &p,
             0.0,
+        
+            Some("h264"),
         );
         assert!(args.join(" ").contains("scale=-2:720"));
     }
@@ -520,6 +866,8 @@ mod tests {
             Path::new("/cache/s"),
             &p,
             0.0,
+        
+            Some("h264"),
         );
         let filter = args.join(" ");
         assert!(filter.contains("subtitles="));
@@ -535,8 +883,26 @@ mod tests {
             Path::new("/cache/s"),
             &plan(StreamAction::Copy, StreamAction::Copy),
             0.0,
+        
+            Some("h264"),
         );
         assert!(args.contains(&"0:a:0?".to_string()));
+    }
+
+    #[test]
+    fn faixa_escolhida_e_a_que_entra_na_playlist() {
+        let mut p = plan(StreamAction::Copy, StreamAction::Copy);
+        p.audio_track = Some(1);
+        let args = manager().build_args(
+            Path::new("/media/dual.mkv"),
+            Path::new("/cache/s"),
+            &p,
+            0.0,
+        
+            Some("h264"),
+        );
+        assert!(args.contains(&"0:a:1?".to_string()));
+        assert!(!args.contains(&"0:a:0?".to_string()));
     }
 
     #[tokio::test]

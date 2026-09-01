@@ -65,6 +65,12 @@ pub struct WorkListItem {
     pub match_state: String,
     pub match_confidence: Option<f32>,
     pub dominant_color: Option<String>,
+    /// A sinopse, na lista e não só na ficha (R63).
+    ///
+    /// É a linha da lista de episódios que responde "qual era esse mesmo?" sem
+    /// abrir nada. Nula em 7.216 dos 14.844 episódios do acervo — e nula é a
+    /// resposta certa: o cliente não desenha a linha em vez de inventá-la.
+    pub overview: Option<String>,
     /// Caminho relativo servido em `/artwork/...`; None enquanto não identificado.
     pub poster: Option<String>,
     /// Arte larga da obra. Baixada desde o M1 junto com o pôster, mas só passou
@@ -174,6 +180,19 @@ pub struct ReviewWork {
     /// provider. Ver a coluna homônima na migração 0008.
     pub match_reasons: serde_json::Value,
     pub filename: String,
+    /// **Quando esta identificação foi feita** — o que separa "mexi nisto" de
+    /// "decidi isto".
+    ///
+    /// Numa obra `confirmed` é o instante em que uma PESSOA confirmou: o
+    /// matcher automático pula `confirmed` e `ignored`, então nada sobrescreve
+    /// depois. Numa `auto`, é quando o matcher decidiu sozinho — que é
+    /// exatamente o que a conferência quer revisitar, porque nunca passou por
+    /// revisão nenhuma.
+    ///
+    /// `null` em obra nunca identificada, e também nas que foram identificadas
+    /// antes de alguém ler esta coluna. Fica nulo: a tela mostra "sem data" em
+    /// vez de inventar um instante.
+    pub matched_at: Option<DateTime<Utc>>,
 }
 
 /// O que o parser entendeu do nome do arquivo — mostrado lado a lado com os
@@ -254,7 +273,28 @@ pub struct ScopeQuery {
     pub q: Option<String>,
     /// `files` (padrão): as pastas que resolvem mais arquivos primeiro. É a
     /// ordenação que faz a fila encolher rápido. `path` pra varrer em ordem.
+    ///
+    /// `identificadas_recentes` é a do modo conferência, e existe porque o
+    /// padrão não serve lá: pasta já conferida tem zero pendentes, e no
+    /// `pendentes DESC` todas empatariam.
     pub sort: Option<String>,
+    /// **Que pastas listar** (R77). O padrão é o de sempre.
+    ///
+    /// | valor | o que devolve |
+    /// |---|---|
+    /// | `pendentes` (padrão) | só pasta com arquivo por identificar |
+    /// | `identificadas` | pasta que já tem arquivo `auto` ou `confirmed` |
+    /// | `todas` | sem filtro |
+    ///
+    /// **`identificadas` não é o complemento de `pendentes`.** Uma pasta com
+    /// cinco arquivos identificados e cinco não aparece NOS DOIS modos — ela é
+    /// ao mesmo tempo trabalho a fazer e decisão a conferir, e escondê-la de um
+    /// dos lados perderia metade dela.
+    ///
+    /// Valor desconhecido cai no padrão, como o `sort` e o `tipo` do
+    /// `works::list` — a fila de trabalho é o uso normal e não pode virar erro
+    /// por causa de um erro de digitação.
+    pub mostrar: Option<String>,
     #[serde(default = "cem")]
     pub limit: i64,
     #[serde(default)]
@@ -281,6 +321,16 @@ pub struct ScopeRow {
     pub exemplos: Vec<String>,
     /// O que o parser entende do NOME DA PASTA — normalmente o nome da série.
     pub titulo_sugerido: String,
+    /// **Quando esta pasta foi identificada** — o `matched_at` MAIS RECENTE
+    /// entre os arquivos já identificados dela.
+    ///
+    /// O mais recente, e não o primeiro, porque é ele que responde a pergunta
+    /// do modo conferência: *o que eu decidi por último?* Uma pasta mexida
+    /// ontem e completada hoje é uma pasta de hoje.
+    ///
+    /// `null` quando não há arquivo identificado, ou quando os que há vêm de
+    /// antes de a coluna passar a ser lida.
+    pub identificada_em: Option<DateTime<Utc>>,
     /// A obra que os irmãos já casados apontam. Não é palpite: é o que o
     /// próprio acervo já decidiu para arquivos vizinhos.
     pub sibling_match: Option<SiblingMatch>,
@@ -290,7 +340,14 @@ pub struct ScopeRow {
 
 #[derive(Debug, Deserialize)]
 pub struct ReviewQuery {
-    /// `needs_review` (padrão), `unmatched`, ou os dois separados por vírgula.
+    /// Qualquer `match_state`, sozinho ou separado por vírgula. `needs_review`
+    /// é o padrão.
+    ///
+    /// **Não há lista branca aqui, e é de propósito.** `auto,confirmed` é a
+    /// consulta da conferência: identificar era porta de mão única — no
+    /// instante em que a obra saía de `needs_review` ela sumia da tela e não
+    /// havia filtro que a trouxesse de volta. Quem identificou errado, ou quem
+    /// quer conferir o que o matcher decidiu sozinho, entra por aqui.
     pub state: Option<String>,
     pub library: Option<Uuid>,
     /// Prefixo de caminho — fatia a fila por pasta.
@@ -460,11 +517,23 @@ pub struct CollectionRow {
     pub position: Option<i32>,
     pub origin: String,
     pub provider_key: Option<String>,
+    /// Arte da própria coleção, servida em `/artwork/...` (R63).
+    ///
+    /// Existe na tabela desde o M1 e não saía daqui. Numa temporada é o pôster
+    /// dela; numa série, o da série. `None` enquanto o job de temporadas não
+    /// passou — e aí o cliente cai no `still` do primeiro episódio, que é o
+    /// que ele já faz.
+    pub poster: Option<String>,
+    pub backdrop: Option<String>,
+    pub dominant_color: Option<String>,
     /// Obras na **subárvore inteira**, não só filhos diretos.
     ///
     /// Contava só o nível de baixo, e como episódio mora na temporada, toda
     /// série aparecia como "0" na tela — com 70 episódios embaixo.
     pub item_count: i64,
+    /// Quantas da subárvore **quem perguntou** já terminou (R63). É o que
+    /// desenha a barra da temporada na ficha da série.
+    pub finished_count: i64,
     /// Até quatro pôsteres da subárvore, pra capa empilhada do cartão.
     pub posters: Option<Vec<String>>,
 }
@@ -538,6 +607,29 @@ pub struct MatchRequest {
     /// Refaz até o que já foi casado automaticamente. Nunca toca no confirmado.
     #[serde(default)]
     pub force: bool,
+    /// **O alvo da rodada** — R74. `novas` (padrão), `pendentes` ou `tudo`.
+    ///
+    /// Existia só o interruptor `force`, e ele pulava de um extremo ao outro:
+    ///
+    /// | | o que entra |
+    /// |---|---|
+    /// | `force = false` | só `unmatched` |
+    /// | `force = true` | `unmatched` + `needs_review` + **`auto`** |
+    ///
+    /// Faltava o meio, e é justamente ele que uma melhoria de parser ou de
+    /// score pede: **o que está pendente**. Quando o `guess` passou a ler
+    /// "Episódio" como não-título (R71) e o desempate por temporada entrou
+    /// (R72), as 3.373 obras em revisão deixaram de estar certas — e nenhuma
+    /// delas é alcançada por `force = false`. A saída era `force = true`, que
+    /// refaz de quebra 4.689 identificações que já estavam boas: milhares de
+    /// chamadas ao provider e de artes rebaixadas pra reconfirmar o que
+    /// ninguém questionou.
+    ///
+    /// ⚠️ **Nenhum dos três toca `confirmed` nem `ignored`.** Decisão humana
+    /// não é refeita pela máquina — é a regra do §8b, e ela não tem exceção
+    /// aqui. `alvo=tudo` é o teto, e o teto para antes das pessoas.
+    #[serde(default)]
+    pub alvo: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

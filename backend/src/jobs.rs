@@ -149,6 +149,25 @@ pub async fn latest(pool: &PgPool, kind: &str) -> Option<JobRow> {
     .flatten()
 }
 
+/// Um job pelo id — **R81**.
+///
+/// Existia `latest(kind)` e `list()`, e nenhum dos dois serve pra acompanhar
+/// UMA execução: `latest` responde sobre o tipo, não sobre o job que você
+/// abriu, e `list` obriga o cliente a baixar 50 linhas e procurar a sua dentro
+/// a cada consulta. Quem recebeu um `job_id` precisa poder perguntar por ele.
+pub async fn get(pool: &PgPool, id: Uuid) -> Option<JobRow> {
+    sqlx::query_as(
+        "SELECT id, kind, state, progress, total, done, failed, current, reasons,
+                error, cancel_requested, started_at, finished_at
+         FROM job WHERE id = $1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .ok()
+    .flatten()
+}
+
 pub async fn list(pool: &PgPool, limit: i64) -> Vec<JobRow> {
     sqlx::query_as(
         "SELECT id, kind, state, progress, total, done, failed, current, reasons,

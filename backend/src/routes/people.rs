@@ -124,6 +124,7 @@ pub async fn detail(
         SELECT
             w.id, w.kind, w.title, w.year, w.season_number, w.episode_number,
             w.match_state, w.match_confidence, w.dominant_color,
+            w.overview,
             w.artwork->>'poster' AS poster,
             w.artwork->>'backdrop' AS backdrop,
             w.artwork->>'still' AS still,

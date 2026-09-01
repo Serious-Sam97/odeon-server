@@ -15,6 +15,7 @@ pub mod menu;
 pub mod metadata;
 pub mod people;
 pub mod perfil;
+pub mod pareamento;
 pub mod playback;
 pub mod retrospectiva;
 pub mod revista;
@@ -47,6 +48,8 @@ pub fn router(state: AppState) -> Router {
         // R27: o token que vai no `?token=` das rotas de mídia. Curto, e sem
         // acesso a nada além de bytes — ver `auth/middleware.rs`.
         .route("/api/auth/media-token", post(auth::media_token))
+        // R45: o token longo, só pra `/artwork/`. Ver `aceita_token_de_arte`.
+        .route("/api/auth/artwork-token", post(auth::artwork_token))
         .route("/api/auth/password", post(auth::change_password))
         .route(
             "/api/auth/sessions",
@@ -67,6 +70,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/convites", get(convite::listar).post(convite::criar))
         .route("/api/convites/{para}", delete(convite::revogar))
         .route("/api/convites/resgatar", post(convite::resgatar))
+        // R46: o celular pede o código, a TV o troca por sessão. `resgatar` é
+        // pública pelo mesmo motivo da linha acima — do lado da TV ainda não há
+        // sessão nenhuma, e o código é a credencial.
+        .route("/api/pareamento", post(pareamento::criar))
+        .route("/api/pareamento/resgatar", post(pareamento::resgatar))
         // R26: `root_path` é o caminho do SEU disco. A auditoria da §42
         // encontrou `/media/Movies` numa resposta 200 pra conta comum.
         .route("/api/libraries", get(list_libraries).post(create_library))
@@ -76,6 +84,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/scan/status", get(scan_status))
         // Histórico e controle das operações longas — ver o módulo `jobs`.
         .route("/api/jobs", get(list_jobs))
+        .route("/api/jobs/{id}", get(get_job))
         .route("/api/jobs/{id}/cancel", post(cancel_job))
         .route("/api/works", get(works::list))
         // A biblioteca agrupada: série vira UMA entrada. Rota separada de
@@ -83,9 +92,16 @@ pub fn router(state: AppState) -> Router {
         // lista plana de episódios, e é `/api/works` que responde isso.
         .route("/api/library", get(works::library))
         .route("/api/works/{id}", get(works::detail).delete(works::delete_work))
-        .route("/api/works/{id}/progress", post(works::progress))
+        .route(
+            "/api/works/{id}/progress",
+            // R69: o `DELETE` é o desfazer do `POST` — mesma obra, mesma
+            // pessoa, e some do mural.
+            post(works::progress).delete(works::apagar_progresso),
+        )
         .route("/api/continue", get(works::continue_watching))
         .route("/api/stream/{media_file_id}", get(stream::stream))
+        // R80 — o mesmo arquivo, remuxado num mp4 só, pra levar no avião.
+        .route("/api/stream/{media_file_id}/baixar", get(stream::baixar))
         // --- M1: identidade ---
         .route("/api/match", post(metadata::start))
         .route("/api/match/status", get(metadata::status))
@@ -120,6 +136,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/works/{id}/ignore", post(works::ignore_work))
         .route("/api/storage", get(works::storage))
         .route("/api/diagnostico", get(works::diagnostico))
+        // R70: o número de sumidos é a única linha da saúde que é perda real —
+        // e sem a lista ninguém pode agir sobre ela.
+        .route("/api/diagnostico/sumidos", get(works::sumidos))
         // Correção humana do parse, persistida — ver o handler.
         .route(
             "/api/works/{id}/parse",
@@ -150,6 +169,14 @@ pub fn router(state: AppState) -> Router {
         // R32: as sagas. `belongs_to_collection` do TMDB, que o `IDEIAS.md` §7
         // registrava como dívida — pré-requisito das conquistas de trilogia.
         .route("/api/maintenance/aquecer-sagas", post(aquecer_sagas))
+        // R75 — a estrutura que vem do disco: série e canal a partir da pasta,
+        // sem provider nenhum. `?dry_run=false` pra valer.
+        .route("/api/maintenance/estrutura", post(montar_estrutura))
+        // R76 — a identidade da pasta: uma busca e uma ficha por pasta, não
+        // por arquivo. Por ora só propõe; aplicar é o passo seguinte.
+        .route("/api/maintenance/identificar-pastas", post(propor_pastas))
+        // R63 — a ficha das temporadas (nome, sinopse e pôster próprio).
+        .route("/api/maintenance/aquecer-temporadas", post(aquecer_temporadas))
         // --- R19: a locadora, e R28: o estoque é do servidor ---
         // A prateleira devolve só o que está FORA, não o estado das 746 caixas:
         // quem cruza com a estante é a tela, que já tem as caixas na mão.
@@ -347,6 +374,22 @@ async fn list_jobs(
     Ok(Json(json!(crate::jobs::list(&state.pool, 50).await)))
 }
 
+/// Um job pelo id, para quem acabou de abrir um — **R81**.
+///
+/// `404` quando não existe, e não um corpo vazio com `200`: um job que sumiu e
+/// um job que nunca existiu levam a telas diferentes, e devolver a mesma coisa
+/// para os dois obrigaria o cliente a adivinhar (§8b).
+async fn get_job(
+    State(state): State<AppState>,
+    AdminUser(_): AdminUser,
+    axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
+) -> AppResult<Json<Value>> {
+    crate::jobs::get(&state.pool, id)
+        .await
+        .map(|j| Json(json!(j)))
+        .ok_or(crate::error::AppError::NotFound)
+}
+
 /// Pede o cancelamento. Não mata nada: marca, e o worker para no próximo ponto
 /// seguro — interromper no meio de uma gravação deixaria estado pela metade.
 async fn cancel_job(
@@ -473,6 +516,105 @@ async fn aquecer_sagas(
     Ok(Json(json!({ "started": true, "job_id": id })))
 }
 
+/// R63 — busca no TMDB a ficha de cada temporada: nome, sinopse e pôster.
+///
+/// Medido em 18/08/2026: **473 temporadas, zero com pôster e zero com
+/// sinopse**. Uma chamada por série (120) e não por temporada (473), porque o
+/// `/tv/{id}` devolve `seasons[]` inteiro — ver `metadata::temporada`.
+async fn aquecer_temporadas(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+) -> AppResult<Json<Value>> {
+    let Some(job) = crate::jobs::Job::start(&state.pool, "temporada", json!({}), Some(user.id)).await
+    else {
+        let ativo = crate::jobs::latest(&state.pool, "temporada")
+            .await
+            .map(|j| j.state == "running")
+            .unwrap_or(false);
+        return Ok(Json(json!({
+            "started": false,
+            "reason": if ativo {
+                "já há uma busca de temporadas em andamento"
+            } else {
+                "o banco recusou abrir o job — confira o CHECK de job.kind"
+            },
+        })));
+    };
+
+    let id = job.id;
+    let pool = state.pool.clone();
+    let providers = state.providers.clone();
+    let artwork_dir = state.config.artwork_dir.clone();
+    tokio::spawn(async move {
+        crate::metadata::temporada::aquecer(pool, providers, artwork_dir, Some(job)).await
+    });
+
+    Ok(Json(json!({ "started": true, "job_id": id })))
+}
+
+/// R75 — monta série e canal a partir das pastas, sem tocar no provider.
+///
+/// Medido em 20/08/2026: 507 pastas do acervo são claramente série e só 133
+/// séries existiam no banco. As outras viravam episódio solto na grade.
+///
+/// `dry_run` é o padrão, como em toda rota que escreve em lote aqui.
+async fn montar_estrutura(
+    State(state): State<AppState>,
+    AdminUser(_): AdminUser,
+    Query(params): Query<crate::models::ReparseParams>,
+) -> AppResult<Json<Value>> {
+    // Sem job quando é ensaio: um ensaio não é trabalho, e abrir job pra ele
+    // sujaria o histórico de manutenção com linhas que não mudaram nada.
+    let job = if params.dry_run {
+        None
+    } else {
+        crate::jobs::Job::start(&state.pool, "estrutura", json!({}), None).await
+    };
+    let s = crate::metadata::estrutura::montar(state.pool.clone(), params.dry_run, job).await;
+    Ok(Json(serde_json::to_value(s).unwrap_or_else(|_| json!({}))))
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct PropostaParams {
+    /// Quantas pastas visitar nesta chamada. Cada uma custa uma busca e uma
+    /// ficha no provider, então o padrão é modesto e quem quiser mais pede.
+    #[serde(default = "vinte")]
+    limite: usize,
+    /// Padrão `true`, como em toda rota que escreve em lote aqui — e mais
+    /// ainda nesta: uma pasta aplicada mexe em até 485 obras de uma vez.
+    #[serde(default = "sim")]
+    dry_run: bool,
+}
+
+fn sim() -> bool {
+    true
+}
+
+fn vinte() -> usize {
+    20
+}
+
+/// R76 — propõe uma série pra cada pasta montada pela R75, e aplica as que
+/// passam do limiar.
+///
+/// Quem aplica é o `scopes::aplicar` — o mesmo caminho da decisão manual, com
+/// a regra do §8b dentro: arquivo cujo episódio não resolve entra na série e
+/// fica em revisão, **nunca** `confirmed` com título "Episódio N".
+async fn propor_pastas(
+    State(state): State<AppState>,
+    AdminUser(user): AdminUser,
+    Query(params): Query<PropostaParams>,
+) -> AppResult<Json<Value>> {
+    let s = crate::metadata::pasta::propor(
+        &state,
+        user.id,
+        params.limite.clamp(1, 200),
+        params.dry_run,
+    )
+    .await;
+    Ok(Json(serde_json::to_value(s).unwrap_or_else(|_| json!({}))))
+}
+
 async fn health(State(state): State<AppState>) -> AppResult<Json<Value>> {
     let one: i32 = sqlx::query_scalar("SELECT 1").fetch_one(&state.pool).await?;
     Ok(Json(json!({
@@ -521,6 +663,33 @@ async fn list_libraries(
     ))
 }
 
+/// A regra da R75 que só morava dentro da migração 0048.
+///
+/// `provider_hint = 'none'` quer dizer "nada aqui vai ter ficha em provider
+/// nenhum", e a R75 já respondeu o que isso faz do arquivo: é vídeo de canal.
+/// O `Guess::kind` depende disso — a guarda dele (`if library_default ==
+/// "video"`) é o que impede `001 - Payday 2` de nascer `episode` só pela
+/// numeração, e ela nunca dispara se a biblioteca não disser `video`.
+///
+/// **Por que aqui e não só na migração.** A 0048 escreveu esta mesma regra como
+/// um `UPDATE`, e num banco novo ela casou com zero linhas: migração roda no
+/// boot, biblioteca se cria uma hora depois. Um `UPDATE` só alcança o que já
+/// existe; a linha criada amanhã está fora do alcance de qualquer migração
+/// escrita hoje. Só o caminho que **cria** a linha pode manter o invariante.
+///
+/// **Corrige em vez de recusar**, e isso é por causa da separação dos
+/// repositórios: o cliente manda `default_kind` de um `<select>` que não
+/// conhece esta regra, e um 400 aqui deixaria a aba Pastas sem conseguir criar
+/// a biblioteca do YouTube até o outro lado ser atualizado — a dívida que o
+/// README diz que a separação compra. A correção fica no log, que é onde ela
+/// pode ser vista sem quebrar ninguém.
+fn kind_do_canal(default_kind: &str, provider_hint: &str) -> String {
+    if provider_hint == "none" {
+        return "video".to_string();
+    }
+    default_kind.to_string()
+}
+
 async fn create_library(
     State(state): State<AppState>,
     AdminUser(_): AdminUser,
@@ -567,13 +736,22 @@ async fn create_library(
         }
     }
 
+    let default_kind = kind_do_canal(&body.default_kind, &body.provider_hint);
+    if default_kind != body.default_kind {
+        tracing::info!(
+            name = %body.name,
+            pedido = %body.default_kind,
+            "provider_hint = none: biblioteca de canal, default_kind corrigido pra video"
+        );
+    }
+
     let library = sqlx::query_as::<_, Library>(
         "INSERT INTO library (name, root_path, default_kind, provider_hint)
          VALUES ($1, $2, $3, $4) RETURNING *",
     )
     .bind(&body.name)
     .bind(path.to_string_lossy().to_string())
-    .bind(&body.default_kind)
+    .bind(&default_kind)
     .bind(&body.provider_hint)
     .fetch_one(&state.pool)
     .await
@@ -617,11 +795,12 @@ async fn start_scan(
     let job_id = job.as_ref().map(|j| j.id);
 
     let encadear = params.then.as_deref() == Some("match");
+    let apenas = kind_do_pedido(params.tipo.as_deref());
     let bus = state.events.clone();
     let depois = state.clone();
 
     tokio::spawn(async move {
-        scanner::scan_all(pool, status.clone(), job).await;
+        scanner::scan_kind(pool, status.clone(), job, apenas).await;
         let finished = status.lock().await.clone();
         crate::events::publish(
             &bus,
@@ -650,13 +829,16 @@ async fn start_scan(
         let job_match =
             crate::jobs::Job::start(&depois.pool, "match", json!({ "chained": true }), None).await;
         tracing::info!("varredura concluída — identificação encadeada");
-        crate::metadata::run_matching(
+        crate::metadata::run_matching_kind(
             depois.pool.clone(),
             depois.providers.clone(),
             depois.config.artwork_dir.clone(),
             depois.matching.clone(),
-            false,
+            // O encadeamento do `scan` busca **o que é novo** — quem quer
+            // refazer o pendente chama o `/api/match?alvo=pendentes` (R74).
+            "novas",
             job_match,
+            apenas,
         )
         .await;
         let m = depois.matching.lock().await.clone();
@@ -705,6 +887,39 @@ async fn start_scan(
 struct ScanRequest {
     /// `match` encadeia a identificação depois da varredura.
     then: Option<String>,
+    /// **O escopo da busca** — R73. `filme`, `serie`, ou ausente pra tudo.
+    ///
+    /// Os três gestos que o cliente pediu, no formato do Jellyfin:
+    ///
+    /// ```text
+    /// POST /api/scan?tipo=filme&then=match     busca e identifica os filmes
+    /// POST /api/scan?tipo=serie&then=match     busca e identifica as séries
+    /// POST /api/scan?then=match                os dois, e o resto
+    /// ```
+    ///
+    /// Um parâmetro e não três rotas porque as três compartilham a trava, o
+    /// job e o encadeamento — três handlers seriam três lugares pra esquecer
+    /// de segurar o mesmo cadeado.
+    ///
+    /// O corte é por `library.default_kind`, que é o que uma biblioteca
+    /// **declara ser**. "Tudo" continua incluindo YouTube e Clipes na
+    /// varredura; a identificação já os pula sozinha pelo `provider_hint`.
+    tipo: Option<String>,
+}
+
+/// `filme` → `movie`, `serie` → `episode`. Qualquer outra coisa é tudo.
+///
+/// O vocabulário da API é o do produto, e o da coluna é o do schema —
+/// traduzir aqui evita que o cliente precise saber que "série" se guarda como
+/// `episode`.
+fn kind_do_pedido(tipo: Option<&str>) -> Option<&'static str> {
+    match tipo.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+        Some("filme") | Some("filmes") | Some("movie") | Some("movies") => Some("movie"),
+        Some("serie") | Some("series") | Some("série") | Some("séries") | Some("episode") => {
+            Some("episode")
+        }
+        _ => None,
+    }
 }
 
 /// Apagar biblioteca leva junto arquivos e obras (cascade no schema). O
@@ -768,11 +983,19 @@ async fn update_library(
     axum::extract::Path(id): axum::extract::Path<uuid::Uuid>,
     Json(body): Json<UpdateLibrary>,
 ) -> AppResult<Json<Library>> {
+    // O mesmo invariante do `create_library`, e ele precisa estar aqui também:
+    // sem isto a combinação volta por PATCH, tanto trocando o `provider_hint`
+    // pra `none` quanto mandando `default_kind` de novo numa biblioteca que já
+    // é `none`. O `CASE` lê o `provider_hint` **de depois** do update — que é o
+    // que o `COALESCE($4, provider_hint)` repetido está fazendo ali dentro.
     sqlx::query(
         "UPDATE library SET
             name = COALESCE($2, name),
-            default_kind = COALESCE($3, default_kind),
-            provider_hint = COALESCE($4, provider_hint)
+            provider_hint = COALESCE($4, provider_hint),
+            default_kind = CASE
+                WHEN COALESCE($4, provider_hint) = 'none' THEN 'video'
+                ELSE COALESCE($3, default_kind)
+            END
          WHERE id = $1",
     )
     .bind(id)
@@ -813,10 +1036,38 @@ async fn scan_status(State(state): State<AppState>) -> Json<scanner::ScanStatus>
 
 #[cfg(test)]
 mod tests {
+    /// **R73 — o vocabulário da API é o do produto, não o do schema.**
+    ///
+    /// O cliente pede "filme" e "série"; a coluna guarda `movie` e `episode`.
+    /// Se a tradução vazar pro cliente, ele passa a precisar saber que uma
+    /// série se guarda como episódio — que é detalhe de dentro.
+    #[test]
+    fn o_tipo_da_busca_fala_a_lingua_do_produto() {
+        assert_eq!(super::kind_do_pedido(Some("filme")), Some("movie"));
+        assert_eq!(super::kind_do_pedido(Some("Filmes")), Some("movie"));
+        assert_eq!(super::kind_do_pedido(Some("serie")), Some("episode"));
+        assert_eq!(super::kind_do_pedido(Some("séries")), Some("episode"));
+        // E o nome do schema também serve, pra quem já o conhece.
+        assert_eq!(super::kind_do_pedido(Some("movie")), Some("movie"));
+        assert_eq!(super::kind_do_pedido(Some("episode")), Some("episode"));
+    }
+
+    /// **Ausente e desconhecido são a mesma coisa: tudo.**
+    ///
+    /// Um `tipo=` com erro de digitação não pode varrer metade do acervo em
+    /// silêncio — e não pode virar erro, porque "tudo" é o padrão que sempre
+    /// existiu e é o que o cliente antigo manda.
+    #[test]
+    fn tipo_ausente_ou_torto_varre_tudo() {
+        assert_eq!(super::kind_do_pedido(None), None);
+        assert_eq!(super::kind_do_pedido(Some("")), None);
+        assert_eq!(super::kind_do_pedido(Some("fimle")), None);
+    }
+
     /// **As sagas vêm depois da identificação, e não depois da varredura.**
     ///
     /// O alvo do job de saga é filme com `match_state IN ('auto','confirmed')`
-    /// e id do TMDB. Encadeá-lo logo após o `scan_all` acharia zero filme novo,
+    /// e id do TMDB. Encadeá-lo logo após o `scan_kind` acharia zero filme novo,
     /// porque nenhum deles foi identificado ainda — e o defeito seria invisível:
     /// o job rodaria, terminaria bem e não faria nada.
     #[test]
@@ -835,6 +1086,57 @@ mod tests {
         assert!(
             pos_match < pos_saga,
             "as sagas passaram a ser encadeadas antes da identificação"
+        );
+    }
+
+    /// **R75 — biblioteca sem provider é biblioteca de canal.**
+    ///
+    /// O `<select>` do cliente oferece `other`, e foi com `other` que a
+    /// biblioteca do YouTube nasceu: 2.511 arquivos sem `format:`, dos quais
+    /// 2.180 caíram na aba de filmes (que filtra por negação, não por
+    /// `format:filme`) e 331 na de séries. Nenhum dos dois é filme ou série.
+    #[test]
+    fn biblioteca_sem_provider_nasce_como_canal() {
+        assert_eq!(super::kind_do_canal("other", "none"), "video");
+        assert_eq!(super::kind_do_canal("movie", "none"), "video");
+        assert_eq!(super::kind_do_canal("episode", "none"), "video");
+        assert_eq!(super::kind_do_canal("video", "none"), "video");
+    }
+
+    /// **E a regra não vale pra mais ninguém.**
+    ///
+    /// `none` é a única declaração que responde *o que o arquivo é*. Uma
+    /// biblioteca `auto` ou `anilist` continua sendo o que a pessoa escolheu —
+    /// corrigir ali seria trocar a escolha dela por um palpite.
+    #[test]
+    fn biblioteca_com_provider_mantem_o_que_foi_escolhido() {
+        assert_eq!(super::kind_do_canal("movie", "auto"), "movie");
+        assert_eq!(super::kind_do_canal("episode", "auto"), "episode");
+        assert_eq!(super::kind_do_canal("other", "auto"), "other");
+        assert_eq!(super::kind_do_canal("episode", "anilist"), "episode");
+    }
+
+    /// **O PATCH tem que segurar o mesmo invariante que o POST.**
+    ///
+    /// Este é o buraco que a 0048 deixou aberto de outro jeito: adiantava pouco
+    /// o `create_library` corrigir se `PATCH /api/libraries/{id}` pudesse pôr a
+    /// combinação de volta — trocando o `provider_hint` pra `none`, ou mandando
+    /// `default_kind` numa biblioteca que já é `none`. O `CASE` no SQL é o que
+    /// fecha os dois casos, e ele tem de ler o `provider_hint` de **depois** do
+    /// update, não o de antes.
+    #[test]
+    fn o_patch_nao_desfaz_a_regra_do_canal() {
+        let fonte = include_str!("mod.rs");
+        let corpo = fonte
+            .split_once("async fn update_library")
+            .expect("update_library sumiu")
+            .1
+            .split_once("WHERE id = $1")
+            .expect("o UPDATE de update_library mudou de forma")
+            .0;
+        assert!(
+            corpo.contains("WHEN COALESCE($4, provider_hint) = 'none' THEN 'video'"),
+            "update_library voltou a aceitar default_kind livre com provider_hint = none"
         );
     }
 }
